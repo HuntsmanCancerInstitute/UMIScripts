@@ -21,6 +21,13 @@ use String::Approx qw(amatch);
 
 
 my $fixed = 'ATTGGAGTCCT'; # antisequence is AGGACTCCAAT
+my $file1;
+my $file2;
+my $outbase;
+my $outdir;
+my $bc_length = 12;
+my $interleave;
+
 my $help = <<END;
 
 A script to strip out the Qiagen QiaSeq barcode from the second 
@@ -42,7 +49,7 @@ Options:
         --f2 <file>     Second Fastq read, expected to contain the 
                         barcode. May be gzipped. Both files may also
                         be simply appended to the command line.
-        --len <integer> Length of the molecular barcode. Default 12.
+        --len <integer> Length of the molecular barcode. Default $bc_length.
         --fix <ATGC>    Sequence of the fixed portion of the barcode. 
                         Up to two edits (mismatch, indel) are allowed. 
                         Default is '$fixed'.
@@ -59,13 +66,6 @@ unless (@ARGV) {
 	print $help;
 	exit;
 }
-
-my $file1;
-my $file2;
-my $outbase;
-my $outdir;
-my $bc_length = 12;
-my $interleave;
 
 # options
 GetOptions( 
@@ -184,11 +184,8 @@ while (my $header1  = $infh1->getline) {
 		my $quality_bc = substr($quality2, 0, $bc_length);
 		
 		# remove barcode
-		$sequence2 = substr($sequence2, $bc_length);
-		$quality2  = substr($quality2, $bc_length);
-		
-		# mask barcode
-# 		substr($sequence2, 0, $bc_fix_length, $replacement);
+		$sequence2 = substr($sequence2, $bc_fix_length);
+		$quality2  = substr($quality2, $bc_fix_length);
 		
 		# write output
 		# we have to write out fastq1 too to keep the files in sync
