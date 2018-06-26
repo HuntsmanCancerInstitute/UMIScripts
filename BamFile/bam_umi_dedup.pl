@@ -28,12 +28,14 @@ eval {
 	$parallel = 1;
 };
 
-my $VERSION = 1.2;
+my $VERSION = 1.3;
 # version 1.0 - initial version
 # version 1.1 - added option to write the duplicates to second bam file
 # version 1.2 - add marking and parallel processing, make compatible with 
 #               qiagen_umi_extractor script
-
+# version 1.3 - remove the UMI in the UMI regex of the read name to work 
+#               with Illumina UMI marked fastq files, allow N in UMI, 
+#               write all reads without UMI codes instead of dying. 
 
 unless (@ARGV) {
 	print <<END;
@@ -46,13 +48,15 @@ base qualities. Retained reads are written to the output bam file.
 
 See the scripts ChIPNexus_fastq_barcode_processer.pl or qiagen_umi_extractor.pl 
 for pre-processing the Fastq files prior to alignments, which will append the 
-random UMI code to the read name.
+random UMI code to the read name. This should also work with UMIs extracted 
+with the new Illumina BCL2Fastq v2 software, which are appended to the read 
+name.
 
 Bam files must be sorted by coordinate. Bam files will be indexed as necessary.
 Currently only single-end alignments are accepted.
 
 Duplicate alignments by default are discarded, or they may be optionally 
-marked as duplicate (big flag 0x400) and retained.
+marked as duplicate (bit flag 0x400) and retained.
 
 Unaligned reads are silently discarded.
 
@@ -120,6 +124,7 @@ else {
 my $totalCount = 0;
 my $goodCount  = 0;
 my $badCount   = 0;
+my $untagCount = 0;
 
 
 # deduplicate in single or multi-thread
@@ -145,6 +150,11 @@ printf "
  %12s (%.1f%%) UMI-duplicate alignments %s
 ", $totalCount, $goodCount, ($goodCount/$totalCount) * 100, $badCount, 
 ($badCount/$totalCount) * 100, $markdups ? 'marked' : 'discarded';
+if ($untagCount) {
+	printf " %12s (%.1f%%) alignments without UMI tags retained\n", $untagCount, 
+		($untagCount/$totalCount) * 100;
+}
+
 
 # end
 
@@ -170,6 +180,7 @@ sub deduplicate_singlethread {
 			totalCount => 0,
 			goodCount  => 0,
 			badCount   => 0,
+			untagged   => 0,
 			outbam     => $outbam,
 			reads      => [],
 		};
@@ -186,6 +197,7 @@ sub deduplicate_singlethread {
 		$totalCount += $data->{totalCount};
 		$goodCount  += $data->{goodCount};
 		$badCount   += $data->{badCount};
+		$untagCount += $data->{untagged};
 	}
 	
 	# finished
@@ -203,6 +215,7 @@ sub deduplicate_multithread {
 		$totalCount += $data->{totalCount};
 		$goodCount  += $data->{goodCount};
 		$badCount   += $data->{badCount};
+		$untagCount += $data->{untagged};
 	});
 	
 	# prepare targets and names
@@ -230,6 +243,7 @@ sub deduplicate_multithread {
 			totalCount => 0,
 			goodCount  => 0,
 			badCount   => 0,
+			untagged   => 0,
 			outbam     => $tempbam,
 			reads      => [],
 		};
@@ -316,15 +330,15 @@ sub write_reads {
 	
 	# put the reads into a hash based on tag identifer
 	my %tag2reads;
+	my @untagged;
 	foreach my $a (@{ $data->{reads} }) {
 		my $tag;
-		if ($a->qname =~ /:UMI:([AGTC]+)$/) {
+		if ($a->qname =~ /:([AGTCN]+)$/) {
 			$tag = $1;
 		}
 		else {
-			die sprintf 
-				" unable to identify bar code string at end of read '%s'! Please pre-process your reads with UMI:NNNN!\n", 
-				$a->qname;
+			push @untagged, $a;
+			next;
 		}
 		$tag2reads{$tag} ||= [];
 		push @{ $tag2reads{$tag} }, $a;
@@ -354,6 +368,14 @@ sub write_reads {
 					&$write_alignment($data->{outbam}, $a);
 				}
 			}
+		}
+	}
+	
+	# write untagged reads
+	if (@untagged) {
+		$data->{untagged} += scalar(@untagged);
+		foreach my $a (@untagged) {
+			&$write_alignment($data->{outbam}, $a);
 		}
 	}
 	
