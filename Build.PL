@@ -11,7 +11,7 @@ my $build = Module::Build->new(
 	license           => 'artistic_2',
 	meta_merge        => {
 		resources     => {
-			repository     => 'https://github.com/tjparnell/'
+			repository     => 'https://github.com/HuntsmanCancerInstitute/UMIScripts'
 		}
 	},
 	requires          => {
