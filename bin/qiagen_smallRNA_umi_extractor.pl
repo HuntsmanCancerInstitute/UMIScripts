@@ -23,6 +23,8 @@ eval {
 	$mismatch_ok = 1;
 };
 
+my $VERSION = 2;
+
 ########################################
 
 
@@ -55,7 +57,7 @@ if desired; be sure to use adapter trimming on these reads.
 The UMI is appended to the name of the read (for lack of a better place 
 to store it), and can be used in subsequent processing to remove PCR 
 duplicates in combination with alignment information. See the script 
-qiaseq_bam_deduplication.pl as the companion application to do this.
+bam_umi_dedup.pl as the companion application to do this.
 
 Usage: $0 -i input.fastq.gz --fail noUMI.fastq.gz | <aligner>
 
@@ -194,6 +196,14 @@ while (my $header1  = $infh->getline) {
 	
 	if ($i == -1) {
 		# the adapter sequence was not found
+		$notFoundCount++;
+		if ($failfh) {
+			$failfh->print("$header1$sequence1$spacer1$quality1");
+		}
+	}
+	elsif ($i == 0) {
+		# adapter sequence at beginning of the read
+		# no RNA insert, nothing to sequence
 		$notFoundCount++;
 		if ($failfh) {
 			$failfh->print("$header1$sequence1$spacer1$quality1");
