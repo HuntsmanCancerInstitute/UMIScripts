@@ -1,0 +1,12 @@
+bin/bam_umi_dedup.pl
+bin/qiagen_smallRNA_umi_extractor.pl
+bin/qiaseq_bam_deduplication.pl
+bin/qiaseq_barcode_extractor.pl
+bin/qiaseq_FastqBarcodeTagger.pl
+bin/SingleEndFastqBarcodeTagger.pl
+Build.PL
+LICENSE
+MANIFEST			This list of files
+META.json
+META.yml
+Readme.md
