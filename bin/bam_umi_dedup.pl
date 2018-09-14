@@ -348,6 +348,10 @@ sub deduplicate_multithread {
 ### alignment callback
 sub se_callback {
 	my ($a, $data) = @_;
+	my $flag = $a->flag;
+	return if $flag & 0x0100; # secondary alignment
+	return if $flag & 0x0200; # QC failed but still aligned? is this necessary?
+	return if $flag & 0x0800; # supplementary hit
 	$data->{totalCount} += 1;
 	
 	# check position 
