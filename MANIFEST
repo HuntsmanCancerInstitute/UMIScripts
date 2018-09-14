@@ -1,4 +1,5 @@
 bin/bam_umi_dedup.pl
+bin/embedded_UMI_extractor.pl
 bin/qiagen_smallRNA_umi_extractor.pl
 bin/qiaseq_bam_deduplication.pl
 bin/qiaseq_barcode_extractor.pl
