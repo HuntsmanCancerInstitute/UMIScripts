@@ -1,6 +1,7 @@
 # UMI Scripts
 
-Scripts for handling Unique Molecular Indexes in Fastq and Bam files
+Simple scripts for handling Unique Molecular Indexes in Fastq and Bam files for 
+simple PCR de-duplication purposes.
 
 ## Description
 
@@ -11,6 +12,11 @@ RNA or DNA. This aids in distinguishing biological duplicates from PCR derived d
 This package of scripts aid in processing these UMIs, both from Fastq and Bam files. 
 For simplicity and convenience, the UMI is appended to the read name. Other processing 
 schemes may use Bam attribute tags.
+
+These scripts are designed to be fairly simplistic and work as quickly as possible. 
+As such, UMIs are tested for exact matches without regard to base qualities or mismatches, 
+which is probably suitable in most cases where users are simply looking to remove PCR 
+artifacts. Users needing more advanced tools or reporting may need to look elsewhere.
 
 ## Applications
 
@@ -23,6 +29,13 @@ display the internal help page and list of available options.
 
     A simple script for incorporating a second Fastq read of UMIs into the first 
     Fastq file, appending the UMI to the read name.
+
+- `embedded_UMI_extractor.pl`
+
+    A simple script for extracting the UMI barcode from the beginning of the read. 
+    A fixed sequence may or may not be present between the UMI and the sequenced 
+    insert. Both single-end and paired-end (with or without a second UMI in the 
+    second read) fastq files are supported. The UMI is appended to the read name.
 
 - `qiagen_smallRNA_umi_extractor.pl`
 
@@ -53,9 +66,10 @@ display the internal help page and list of available options.
 
 - `bam_umi_dedup.pl`
 
-    A multi-threaded, single-end, UMI-aware Bam de-duplication application. Alignments 
+    A generic, multi-threaded, UMI-aware Bam de-duplication application. Alignments 
     may be marked or removed based on coordinate, strand, and UMI sequence. UMI 
-    duplicates are selected based on highest quality scores.
+    duplicates are selected based on highest quality scores (mapping and base quality). 
+    Both single-end and paired-end alignments are supported.
 
 - `qiaseq_bam_deduplication.pl`
 
