@@ -160,7 +160,7 @@ if ($infile and not $inpair and not $umipair) {
 	
 	# check output file name
 	unless ($outfile) {
-		my ($basename, $path, $extension) = fileparse($infile, qw(.txt.gz .fastq.gz));
+		my ($basename, $path, $extension) = fileparse($infile, qw(.txt.gz .fastq.gz .fq.gz));
 		$outfile = $path . $basename . '.bc' . $extension;
 	}
 	my $outfh = IO::File->new("| $zipper > $outfile") or 
@@ -217,11 +217,11 @@ elsif ($infile and $inpair and not $umipair) {
 	
 	# check output file name
 	unless ($outfile) {
-		my ($basename, $path, $extension) = fileparse($infile, qw(.txt.gz .fastq.gz));
+		my ($basename, $path, $extension) = fileparse($infile, qw(.txt.gz .fastq.gz .fq.gz));
 		$outfile = $path . $basename . '.bc' . $extension;
 	}
 	unless ($outpair) {
-		my ($basename, $path, $extension) = fileparse($inpair, qw(.txt.gz .fastq.gz));
+		my ($basename, $path, $extension) = fileparse($inpair, qw(.txt.gz .fastq.gz .fq.gz));
 		$outpair = $path . $basename . '.bc' . $extension;
 	}
 	
@@ -303,11 +303,11 @@ elsif ($infile and not $inpair and $umipair) {
 	
 	# check output file name
 	unless ($outfile) {
-		my ($basename, $path, $extension) = fileparse($infile, qw(.txt.gz .fastq.gz));
+		my ($basename, $path, $extension) = fileparse($infile, qw(.txt.gz .fastq.gz .fq.gz));
 		$outfile = $path . $basename . '.bc' . $extension;
 	}
 	unless ($outpair) {
-		my ($basename, $path, $extension) = fileparse($umipair, qw(.txt.gz .fastq.gz));
+		my ($basename, $path, $extension) = fileparse($umipair, qw(.txt.gz .fastq.gz .fq.gz));
 		$outpair = $path . $basename . '.bc' . $extension;
 	}
 	
