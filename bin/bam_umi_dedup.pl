@@ -38,6 +38,8 @@ my $VERSION = 1.4;
 #               with Illumina UMI marked fastq files, allow N in UMI, 
 #               write all reads without UMI codes instead of dying. 
 # version 1.4 - add paired-end support and samtools cat for merging bams
+# version 1.5 - improve pe support by checking each strand separately
+#               this will find inverted pairs that might get tossed, breaking pairs
 
 unless (@ARGV) {
 	print <<END;
@@ -372,13 +374,7 @@ sub pe_callback {
 	
 	## check the alignment
 	return unless $a->proper_pair; # consider only proper pair alignments
-	return unless $a->tid == $a->mtid;
-	my $isize = $a->isize; 
-	if ($a->reversed) {
-		# in proper FR pairs reverse alignments are negative
-		return if $isize > 0; # pair is RF orientation
-		$isize = abs($isize);
-	}
+	return unless $a->tid == $a->mtid; # we can't handle cross-chromosome alignments
 	my $flag = $a->flag;
 	return if ($flag & 0x0100); # secondary alignment
 	return if ($flag & 0x0200); # QC failed but still aligned? is this necessary?
@@ -485,100 +481,93 @@ sub write_pe_reads {
 	
 	# write out forward alignments
 	foreach my $s (sort {$a <=> $b} keys %f_sizes) {
-		my $number = scalar @{ $f_sizes{$s} };
-		if ($number == 1) {
-			# only one, write it
-			my $a = $f_sizes{$s}->[0];
-			$data->{keepers}{ $a->qname } += 1;
+		write_pe_reads_on_strand($data, $f_sizes{$s});
+	}
+	
+	# write out reverse alignments
+	foreach my $s (sort {$a <=> $b} keys %r_sizes) {
+		write_pe_reads_on_strand($data, $r_sizes{$s});
+	}
+}
+
+sub write_pe_reads_on_strand {
+	my ($data, $reads) = @_; 
+		# data reference and array reference of alignment reads
+	
+	# must sort the bams by the barcode
+	my %bc2a; # barcode-to-alignment hash
+	my @untagged;
+	my $number = scalar @$reads - 1;
+	for my $i (0 .. $number) {
+		my $a = $reads->[$i];
+		my $name = $a->qname;
+		if (exists $data->{keepers}{$name}) {
 			&$write_alignment($data->{outbam}, $a);
-			$uniqueCount++;
+			delete $data->{keepers}{$name};
+		}
+		elsif (exists $data->{dupkeepers}{$name}) {
+			mark_alignment($a);
+			&$write_alignment($data->{outbam}, $a);
+			delete $data->{dupkeepers}{$name};
+		}
+		elsif ($name =~ /:([AGTCN]+)$/) {
+			$bc2a{$1} ||= [];
+			push @{ $bc2a{$1} }, $a;
 		}
 		else {
-			# must sort the bams by the barcode
-			my %bc2a; # barcode-to-alignment hash
-			my @untagged;
-			for my $i (0 .. $number - 1) {
-				my $a = $f_sizes{$s}->[$i];
-				if ($a->qname =~ /:([AGTCN]+)$/) {
-					$bc2a{$1} ||= [];
-					push @{ $bc2a{$1} }, $a;
-				}
-				else {
-					push @untagged, $a;
-				}
-			}
+			push @untagged, $a;
+		}
+	}
+	
+	# now write one of each
+	foreach my $bc (keys %bc2a) {
+		if (scalar @{$bc2a{$bc}} == 1) {
+			# only 1 alignment, excellent, write it
+			my $a = $bc2a{$bc}->[0];
+			$data->{keepers}{ $a->qname } += 1;
+			&$write_alignment($data->{outbam}, $a);
+			$data->{uniqueCount}++;
+		}
+		else {
+			# more than one alignment, must rank them by sum of base qualities
+			my @sorted = map {$_->[0]} 
+				sort { ($a->[1] <=> $b->[1]) or ($a->[2] <=> $b->[2]) } 
+				map { [ 
+						$_, 
+						sum($_->qual, $_->aux_get('MQ') || 0),
+						sum($_->qscore, $_->aux_get('ms') || 0) 
+				] } @{ $bc2a{$bc} };
 			
-			# now write one of each
-			foreach my $bc (keys %bc2a) {
-				if (scalar @{$bc2a{$bc}} == 1) {
-					# only 1 alignment, excellent, write it
-					my $a = $bc2a{$bc}->[0];
-					$data->{keepers}{ $a->qname } += 1;
-					&$write_alignment($data->{outbam}, $a);
-					$data->{uniqueCount}++;
-				}
-				else {
-					# more than one alignment, must rank them by sum of base qualities
-					my @sorted = 
-						map {$_->[0]} 
-						sort { ($a->[1] <=> $b->[1]) or ($a->[2] <=> $b->[2]) } 
-						map { [ 
-								$_, 
-								sum($_->qual, $_->aux_get('MQ') || 0),
-								sum($_->qscore, $_->aux_get('ms') || 0) 
-						] } 
-						@{ $bc2a{$bc} };
-					# write the first one
-					my $best = shift @sorted;
-					$data->{keepers}{ $best->qname } += 1;
-					&$write_alignment($data->{outbam}, $best);
-					
-					# increment counters
-					$data->{uniqueCount}++;
-					$data->{duplicateCount} += scalar(@sorted);
-					
-					# write marked remaining duplicates
-					if ($markdups) {
-						foreach my $a (@sorted) {
-							$data->{dupkeepers}{$a->qname};
-							mark_alignment($a);
-							&$write_alignment($data->{outbam}, $a);
-						}
-					}
-				}
-			}
+			# write the first one
+			my $best = shift @sorted;
+			$data->{keepers}{ $best->qname } += 1;
+			&$write_alignment($data->{outbam}, $best);
 			
-			# write untagged reads
-			if (@untagged) {
-				$data->{untagged} += scalar(@untagged);
-				foreach my $a (@untagged) {
-					$data->{keepers}{$a->qname} += 1; # remember to write pair
+			# increment counters
+			$data->{uniqueCount}++;
+			$data->{duplicateCount} += scalar(@sorted);
+			
+			# write marked remaining duplicates
+			if ($markdups) {
+				foreach my $a (@sorted) {
+					$data->{dupkeepers}{$a->qname};
+					mark_alignment($a);
 					&$write_alignment($data->{outbam}, $a);
 				}
 			}
 		}
 	}
 	
-	# write out reverse alignments
-	foreach my $s (sort {$a <=> $b} keys %r_sizes) {
-		while (my $a = shift @{ $r_sizes{$s} }) {
-			my $name = $a->qname;
-			if (exists $data->{keepers}{$name}) {
-				# we have processed the forward alignment as a keeper
-				# immediately write the reverse alignment
-				&$write_alignment($data->{outbam}, $a);
-				delete $data->{keepers}{$name};
-			}
-			elsif ($markdups and exists $data->{dupkeepers}{$name}) {
-				# we have processed the forward alignment as a duplicate keeper
-				# immediately write the reverse alignment
-				mark_alignment($a);
-				&$write_alignment($data->{outbam}, $a);
-				delete $data->{dupkeepers}{$name};
-			}
+	# write untagged reads
+	if (@untagged) {
+		$data->{untagged} += scalar(@untagged);
+		foreach my $a (@untagged) {
+			$data->{keepers}{$a->qname} += 1; # remember to write pair
+			&$write_alignment($data->{outbam}, $a);
 		}
 	}
 }
+
 
 sub write_sam_alignment {
 	# wrapper for writing Bio::DB::Sam alignments
