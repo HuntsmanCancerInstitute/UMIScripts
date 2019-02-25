@@ -25,6 +25,11 @@ display the internal help page and list of available options.
 
 ### Fastq
 
+These pre-alignment scripts are intended to work on Fastq files and extract a UMI and
+either append it to the read name or write it as a third file. This is usually done prior
+to trimming adapters. GZip compressed files are natively handled. Processed reads in 
+some cases can be piped out to downstream applications (adapter trimming or alignment).
+
 - `SingleEndFastqBarcodeTagger.pl`
 
     A simple script for incorporating a second Fastq read of UMIs into the first 
@@ -51,18 +56,25 @@ display the internal help page and list of available options.
     A simple script to extract the UMI code from the beginning of the second Fastq read 
     (paired-end) derived from the Qiagen Qiaseq PCR-amplicon based library preparation 
     kit. It will remove the UMI code and write it as a third Fastq file. This is 
-    designed to work as a pre-processor for using the 
+    designed to work as a Qiagen-specific pre-processor for using the 
     [USeq](https://github.com/HuntsmanCancerInstitute/USeq) FastqBarcodeTagger, 
-    MatchMates, and Consensus applications.
+    MatchMates, and Consensus applications for collapsing PCR duplicate reads into 
+    a single consensus read for re-alignment. See 
+    [Workflows](https://github.com/HuntsmanCancerInstitute/Workflows) for examples.
 
 - `qiaseq_FastqBarcodeTagger.pl`
 
     A simple script, similar to `qiaseq_barcode_extractor.pl`, to extract the UMI 
-    from Qiagen Qiaseq PCR-amplicon based library preparation and incorporating the 
-    UMI into the read name. Intended as a replacement processor for the 
-    [USeq](https://github.com/HuntsmanCancerInstitute/USeq) tool FastqBarcodeTagger.
+    from Qiagen Qiaseq PCR-amplicon based library preparation and appending the 
+    UMI to the read name. Intended as a Qiagen-specific replacement processor for the 
+    [USeq](https://github.com/HuntsmanCancerInstitute/USeq) tool FastqBarcodeTagger 
+    and analogous to `embedded_UMI_extractor.pl`. Reads may then be aligned as normal 
+    and de-duplicated using the below scripts.
 
 ### Bam
+
+These post-alignment scripts are intended to work on Bam files for deduplication based 
+on coordinates and UMI sequence. They work on files only (no streaming). 
 
 - `bam_umi_dedup.pl`
 
@@ -75,7 +87,7 @@ display the internal help page and list of available options.
 
     A paired-end, UMI-aware Bam de-duplication application designed to work with the 
     qiaseq fastq scripts above. UMI duplicates are selected for the highest quality 
-    sequence.
+    sequence. Mostly redundant and superseded by the generic `bam_umi_dedup.pl`.
 
 ## Installation
 
