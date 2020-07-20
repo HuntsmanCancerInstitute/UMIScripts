@@ -7,7 +7,7 @@ use Module::Build;
 my $build = Module::Build->new(
 	dist_name         => 'UMIScripts',
 	module_name       => 'UMIScripts',
-	dist_version      => 3,
+	dist_version      => 4,
 	dist_abstract     => 'Scripts for handling Unique Molecular Indexes in Fastq and Bam files',
 	dist_author       => 'Timothy Parnell <timothy.parnell@hci.utah.edu>',
 	license           => 'artistic_2',
@@ -20,12 +20,12 @@ my $build = Module::Build->new(
 		'Module::Build'           => 0,
 	},
 	requires          => {
+		'String::Approx'            => 0,
 		'Bio::ToolBox'              => 1.60,
 		'Parallel::ForkManager'     => 0,
 		'Bio::DB::HTS'              => 0,
 	},
 	recommends        => {
-		'String::Approx'            => 0,
 	},
 );
 
