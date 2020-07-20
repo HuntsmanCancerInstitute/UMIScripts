@@ -42,14 +42,24 @@ some cases can be piped out to downstream applications (adapter trimming or alig
     insert. Both single-end and paired-end (with or without a second UMI in the 
     second read) fastq files are supported. The UMI is appended to the read name.
 
+- `smallRNA_pe_umi_extractor.pl`
+
+    A simple script for extracting the adapter and UMI sequence from a 
+    paired-end implementation of the Qiagen small RNA library preparation. 
+    The UMI and Qiagen adapter is identified in R2, any complete or partial 
+    Qiagen adapter identified and removed from R1, and R1 is written to output 
+    with the UMI appended to the read name for de-duplication later.
+
 - `qiagen_smallRNA_umi_extractor.pl`
 
     A simple script for extracting the UMI from a Fastq read derived from 
     Qiagen's Small RNA library preparation kit. Typically, a 60 base or longer read 
     is needed. Since small RNAs are typically under 30 bases, the sequence goes 
-    through the RNA insert, adapter, and index code. This script searches for the 
-    adapter sequence, allowing for up to two mismatches, and extracts the remaining 
-    sequence as the UMI.
+    through the RNA insert, Qiagen adapter, and index code. This script searches for the 
+    Qiagen adapter sequence, allowing for up to two mismatches, and extracts the remaining 
+    sequence as the UMI. 
+    
+    For a paired-end implementation of this, see `smallRNA_pe_umi_extractor.pl`.
 
 - `qiaseq_barcode_extractor.pl`
 
@@ -96,6 +106,8 @@ The scripts for bam file processing require additional library requirements of
 [Bio::ToolBox](https://metacpan.org/pod/Bio::ToolBox) and 
 [Bio::DB::HTS](https://metacpan.org/pod/Bio::DB::HTS). Installation instructions 
 can be found at the [Bio::ToolBox repository](https://github.com/tjparnell/biotoolbox).
+Adapter identification with mismatches requires 
+[String::Approx](https://metacpan.org/pod/String::Approx).
 A standard [Module::Build](https://metacpan.org/pod/Module::Build) script is also 
 provided for automated installation.
 
