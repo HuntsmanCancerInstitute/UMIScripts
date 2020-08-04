@@ -14,6 +14,7 @@
 use strict;
 use Getopt::Long;
 use File::Which;
+use IO::File;
 use List::Util qw(sum max);
 use Bio::ToolBox::db_helper 1.50 qw(
 	open_db_connection 
@@ -29,7 +30,7 @@ eval {
 	$parallel = 1;
 };
 
-my $VERSION = 1.4;
+my $VERSION = 1.6;
 # version 1.0 - initial version
 # version 1.1 - added option to write the duplicates to second bam file
 # version 1.2 - add marking and parallel processing, make compatible with 
@@ -40,6 +41,7 @@ my $VERSION = 1.4;
 # version 1.4 - add paired-end support and samtools cat for merging bams
 # version 1.5 - improve pe support by checking each strand separately
 #               this will find inverted pairs that might get tossed, breaking pairs
+# version 1.6 - handle secondary alignments, write program line in bam header 
 
 unless (@ARGV) {
 	print <<END;
@@ -48,6 +50,13 @@ A script to remove duplicates based on a Unique Molecular Index (UMI) code.
 Alignments that match the same coordinate are checked for the random UMI code 
 in the read name; Reads with the same UMI are sorted and selected for one 
 to be retained. 
+
+UMI codes are extracted from the end of the read name as ":NNNN", where 
+NNNN is a sequence of indeterminate length comprised of [A,T,G,C,N]. 
+See the other scripts in the UMIScripts project for pre-processing the Fastq 
+files prior to alignments, which will append the random UMI code to the read 
+name. This should also work with UMIs extracted with the new Illumina 
+BCL2Fastq v2 software, which are appended to the read name.
 
 For single-end alignments, selection criteria include mapping quality and the 
 sum of read base qualities. For paired-end alignments, selection criteria include 
@@ -58,24 +67,24 @@ alignments (using the samtools fixmate tag 'ms').
 Duplicate alignments by default are discarded, or they may be optionally 
 marked as duplicate (bit flag 0x400) and retained.
 
-See the scripts embedded_UMI_extractor.pl or SingleEndFastqBarcodeTagger.pl  
-for pre-processing the Fastq files prior to alignments, which will append the 
-random UMI code to the read name. This should also work with UMIs extracted 
-with the new Illumina BCL2Fastq v2 software, which are appended to the read 
-name.
-
 Bam files must be sorted by coordinate. Bam files will be indexed as necessary.
 
-Unaligned reads are silently discarded.
+Unaligned (flag 0x4) and supplementary (flag 0x800) reads are silently 
+discarded. Secondary alignments may be kept and de-duplicated if specified; 
+however, no guarantee is made that the same sequence read (out of multiple 
+with the same UMI) will be retained across all primary and secondary alignments.
 
 USAGE:  bam_umi_dedup.pl --in in.bam --out out.bam
-       
+
+VERSION: $VERSION
+     
 OPTIONS:
     -i | --in <file>    The input bam file, should be sorted and indexed
     -o | --out <file>   The output bam file.
     -p | --pe           The bam file consists of paired-end alignments
-    -m | --mark         Write all alignments to output and mark duplicates 
-                        with flag bit 0x400.
+                          Only properly-paired alignments are retained
+    -m | --mark         Mark duplicates instead of discarding
+    -s | --secondary    Keep secondary (multi-hit) reads
     -c | --cpu <int>    Specify the number of threads to use (4) 
 
 END
@@ -88,6 +97,7 @@ my $infile;
 my $outfile;
 my $markdups;
 my $paired;
+my $keep_secondary = 0;
 my $cpu;
 my $no_sam;
 my @program_options = @ARGV;
@@ -96,6 +106,7 @@ GetOptions(
 	'out=s'      => \$outfile, # name of output file 
 	'pe!'        => \$paired, # paired-end alignments
 	'mark!'      => \$markdups, # mark duplicates instead of remove
+	'secondary!' => \$keep_secondary, # keep secondary alignments 
 	'cpu=i'      => \$cpu, # number of cpu cores to use
 	'bam=s'      => \$BAM_ADAPTER, # specifically set the bam adapter, advanced!
 	'nosam!'     => \$no_sam, # avoid using external sam adapter, advanced!
@@ -128,6 +139,18 @@ else {
 	die "unrecognized bam adapter $BAM_ADAPTER!";
 }
 
+# update headers
+my $htext = $header->text;
+printf "> the header is a %s object\n> the text is a %s\n> the contents of text is:\n$htext\n", 
+	ref($header), ref(\$htext);
+printf "Dumped header object:\n%s\n", Dumper($header);
+$htext .= sprintf("\@PG\tID:bam_umi_dedup\tVN:%s\tCL:%s", $VERSION, $0);
+$htext .= " --pe" if $paired;
+$htext .= " --mark" if $markdups;
+$htext .= " --secondary" if $keep_secondary;
+$htext .= " --bam $BAM_ADAPTER --in $infile --out $outfile\n";
+
+
 # which callback to use
 my $callback = $paired ? \&pe_callback : \&se_callback;
 
@@ -140,18 +163,19 @@ my $untagCount = 0;
 
 
 # deduplicate in single or multi-thread
-print " Removing duplicates and writing new bam file";
-my $ob; # I need to return the final output bam to main:: and let the normal 
+printf "  - %sing secondary alignments\n", $keep_secondary ? 'Keep' : 'Discard';
+printf "  - Discarding single and improperly paired alignments\n" if $paired;
+print "  - Discarding supplementary alignments\n  - Discarding unmapped alignments\n";
+my $outbam; # I need to return the final output bam to main:: and let the normal 
           # perl exit close it properly, otherwise it crashes hard, and there's 
           # no proper close for the object!!!??????
 if ($parallel and $cpu > 1) {
-	print " in $cpu threads....\n";
-	$ob = deduplicate_multithread();
+	deduplicate_multithread() or die " Something went wrong with de-duplication!\n";
 }
 else {
-	print "....\n";
-	$ob = deduplicate_singlethread();
+	deduplicate_singlethread() or die " Something went wrong with de-duplication!\n";
 }
+undef $outbam if $outbam;
 
 
 # finish up
@@ -177,9 +201,11 @@ if ($untagCount) {
 sub deduplicate_singlethread {
 	
 	# open bam new bam file
-	my $outbam = Bio::ToolBox::db_helper::write_new_bam_file($outfile) or 
+	$outbam = Bio::ToolBox::db_helper::write_new_bam_file($outfile) or 
 		die "unable to open output bam file $outfile! $!";
 		# using an unexported subroutine imported as necessary depending on bam availability
+	# we can't write updated text to the header - otherwise it crashes
+	# $header->text($htext);
 	$outbam->header_write($header);
 	
 	# walk through the file
@@ -220,7 +246,7 @@ sub deduplicate_singlethread {
 	}
 	
 	# finished
-	return $outbam;
+	return 1;
 }
 
 
@@ -249,6 +275,13 @@ sub deduplicate_multithread {
 		
 		### in child
 		$sam->clone;
+		if ($BAM_ADAPTER eq 'sam') {
+			$header = $sam->bam->header;
+		}
+		elsif ($BAM_ADAPTER eq 'hts') {
+			$header = $sam->hts_file->header_read;
+		}
+		
 		
 		# prepare a temporary bam file
 		my $tf = $targetfiles[$tid];
@@ -296,20 +329,29 @@ sub deduplicate_multithread {
 	# this should be faster than going through Perl and bam adapters
 	my $sam_app = which('samtools');
 	if ($sam_app and not $no_sam) {
-		my $command = sprintf "%s cat -o %s ", $sam_app, $outfile;
+		# write a temporary sam header with updated text
+		my $samfile = $outfile;
+		$samfile =~ s/\.bam$/temp.sam/;
+		my $fh = IO::File->new($samfile, '>') or 
+			die "unable to write temporary sam file\n";
+		$fh->print($htext);
+		$fh->close;
+		my $command = sprintf "%s cat -h %s -o %s ", $sam_app, $samfile, $outfile;
 		$command .= join(' ', @targetfiles);
 		print " executing $sam_app cat to merge children...\n";
 		if (system($command)) {
 			die "something went wrong with command '$command'!\n";
 		}
-		unlink @targetfiles;
+		unlink $samfile, @targetfiles;
 		return 1;
 	}
 	
 	# otherwise we do this the old fashioned slow way
 	# open final bam new bam file
-	my $outbam = Bio::ToolBox::db_helper::write_new_bam_file($outfile) or 
+	$outbam = Bio::ToolBox::db_helper::write_new_bam_file($outfile) or 
 		die "unable to open output bam file $outfile! $!";
+	# we can't write updated text to the header - otherwise it crashes
+	# $header->text($htext);
 	$outbam->header_write($header);
 
 	# now remerge all the child files and write to main bam file
@@ -333,7 +375,7 @@ sub deduplicate_multithread {
 		for my $tf (@targetfiles) {
 			my $inbam = Bio::DB::HTSfile->open($tf) or die "unable to open $tf!\n";
 			my $h = $inbam->header_read;
-			while (my $a = $inbam->read1($h)) {
+			while (my $a = $inbam->read1($h)) { 
 				&$write_alignment($outbam, $a);
 			}
 			undef $inbam;
@@ -342,7 +384,7 @@ sub deduplicate_multithread {
 	}
 	
 	# finished
-	return $outbam;
+	return 1
 }
 
 
@@ -351,9 +393,9 @@ sub deduplicate_multithread {
 sub se_callback {
 	my ($a, $data) = @_;
 	my $flag = $a->flag;
-	return if $flag & 0x0100; # secondary alignment
-	return if $flag & 0x0200; # QC failed but still aligned? is this necessary?
-	return if $flag & 0x0800; # supplementary hit
+	return if ($flag & 0x100 and not $keep_secondary); # secondary alignment
+	return if $flag & 0x800; # supplementary hit
+	# we ignore duplicate marks, assume it's not marked anyway....
 	$data->{totalCount} += 1;
 	
 	# check position 
@@ -376,9 +418,8 @@ sub pe_callback {
 	return unless $a->proper_pair; # consider only proper pair alignments
 	return unless $a->tid == $a->mtid; # we can't handle cross-chromosome alignments
 	my $flag = $a->flag;
-	return if ($flag & 0x0100); # secondary alignment
-	return if ($flag & 0x0200); # QC failed but still aligned? is this necessary?
-	return if ($flag & 0x0800); # supplementary hit
+	return if ($flag & 0x100 and not $keep_secondary); # secondary alignment
+	return if ($flag & 0x800); # supplementary hit
 	# we ignore duplicate marks, assume it's not marked anyway....
 	
 	# process forward reads
