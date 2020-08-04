@@ -7,7 +7,7 @@ use Module::Build;
 my $build = Module::Build->new(
 	dist_name         => 'UMIScripts',
 	module_name       => 'UMIScripts',
-	dist_version      => 4,
+	dist_version      => 4.1,
 	dist_abstract     => 'Scripts for handling Unique Molecular Indexes in Fastq and Bam files',
 	dist_author       => 'Timothy Parnell <timothy.parnell@hci.utah.edu>',
 	license           => 'artistic_2',
