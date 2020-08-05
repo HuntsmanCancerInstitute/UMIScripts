@@ -91,13 +91,14 @@ on coordinates and UMI sequence. They work on files only (no streaming).
     A generic, multi-threaded, UMI-aware Bam de-duplication application. Alignments 
     may be marked or removed based on coordinate, strand, and UMI sequence. UMI 
     duplicates are selected based on highest quality scores (mapping and base quality). 
-    Both single-end and paired-end alignments are supported.
+    Both single-end and paired-end alignments are supported. Unmapped, paired singletons, 
+    supplementary, and secondary (by default) alignments are skipped and discarded.
 
 - `qiaseq_bam_deduplication.pl`
 
     A paired-end, UMI-aware Bam de-duplication application designed to work with the 
     qiaseq fastq scripts above. UMI duplicates are selected for the highest quality 
-    sequence. Mostly redundant and superseded by the generic `bam_umi_dedup.pl`.
+    sequence. Superseded by the generic `bam_umi_dedup.pl`.
 
 ## Installation
 
