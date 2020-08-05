@@ -141,9 +141,6 @@ else {
 
 # update headers
 my $htext = $header->text;
-printf "> the header is a %s object\n> the text is a %s\n> the contents of text is:\n$htext\n", 
-	ref($header), ref(\$htext);
-printf "Dumped header object:\n%s\n", Dumper($header);
 $htext .= sprintf("\@PG\tID:bam_umi_dedup\tVN:%s\tCL:%s", $VERSION, $0);
 $htext .= " --pe" if $paired;
 $htext .= " --mark" if $markdups;
