@@ -30,7 +30,7 @@ eval {
 	$parallel = 1;
 };
 
-my $VERSION = 1.6;
+my $VERSION = 1.7;
 # version 1.0 - initial version
 # version 1.1 - added option to write the duplicates to second bam file
 # version 1.2 - add marking and parallel processing, make compatible with 
@@ -42,6 +42,7 @@ my $VERSION = 1.6;
 # version 1.5 - improve pe support by checking each strand separately
 #               this will find inverted pairs that might get tossed, breaking pairs
 # version 1.6 - handle secondary alignments, write program line in bam header 
+# version 1.7 - improve alignment counting methodologies
 
 unless (@ARGV) {
 	print <<END;
@@ -220,6 +221,7 @@ sub deduplicate_singlethread {
 			outbam          => $outbam,
 			reads           => [],
 			keepers         => {},
+			dupkeepers      => {}
 		};
 	
 		# walk through the reads on the chromosome
@@ -296,6 +298,7 @@ sub deduplicate_multithread {
 			outbam          => $tempbam,
 			reads           => [],
 			keepers         => {},
+			dupkeepers      => {}
 		};
 	
 		# walk through the reads on the chromosome
@@ -419,9 +422,6 @@ sub pe_callback {
 	return if ($flag & 0x800); # supplementary hit
 	# we ignore duplicate marks, assume it's not marked anyway....
 	
-	# process forward reads
-	$data->{totalCount} += 1 unless $a->reversed; # only count forward alignments
-	
 	# check position 
 	my $pos = $a->pos;
 	if ($pos == $data->{position}) {
@@ -519,18 +519,30 @@ sub write_pe_reads {
 	
 	# write out forward alignments
 	foreach my $s (sort {$a <=> $b} keys %f_sizes) {
-		write_pe_reads_on_strand($data, $f_sizes{$s});
+		my ($uniq, $dup, $untag) = write_pe_reads_on_strand($data, $f_sizes{$s});
+		# record up the counts
+		$data->{uniqueCount} += $uniq;
+		$data->{duplicateCount} += $dup;
+		$data->{untagged} += $untag;
+		$data->{totalCount} += ($uniq + $dup + $untag);
 	}
 	
 	# write out reverse alignments
 	foreach my $s (sort {$a <=> $b} keys %r_sizes) {
-		write_pe_reads_on_strand($data, $r_sizes{$s});
+		my ($uniq, $dup, $untag) = write_pe_reads_on_strand($data, $r_sizes{$s});
+		# discard these counts - we only count forward strand
+		# weird situations where reverse came first still have a second chance at counts
 	}
 }
 
 sub write_pe_reads_on_strand {
 	my ($data, $reads) = @_; 
 		# data reference and array reference of alignment reads
+	
+	# internal counts for alignments, only counting forward reads
+	my $uniq_c   = 0;
+	my $dup_c    = 0;
+	my $untag_c  = 0;
 	
 	# must sort the bams by the barcode
 	my %bc2a; # barcode-to-alignment hash
@@ -539,14 +551,19 @@ sub write_pe_reads_on_strand {
 	for my $i (0 .. $number) {
 		my $a = $reads->[$i];
 		my $name = $a->qname;
+			# we will count those weird situations here where a reverse read came first
+			# and was processed first, leaving a forward read name in the keeper hash
+			# where it might not get counted normally - so we do so here 
 		if (exists $data->{keepers}{$name}) {
 			&$write_alignment($data->{outbam}, $a);
 			delete $data->{keepers}{$name};
+			$uniq_c++ if not $a->reversed; 
 		}
 		elsif (exists $data->{dupkeepers}{$name}) {
 			mark_alignment($a);
 			&$write_alignment($data->{outbam}, $a);
 			delete $data->{dupkeepers}{$name};
+			$dup_c++ if not $a->reversed; 
 		}
 		elsif ($name =~ /:([AGTCN]+)$/) {
 			$bc2a{$1} ||= [];
@@ -564,7 +581,7 @@ sub write_pe_reads_on_strand {
 			my $a = $bc2a{$bc}->[0];
 			$data->{keepers}{ $a->qname } += 1;
 			&$write_alignment($data->{outbam}, $a);
-			$data->{uniqueCount}++;
+			$uniq_c++ if not $a->reversed;
 		}
 		else {
 			# more than one alignment, must rank them by sum of base qualities
@@ -582,13 +599,15 @@ sub write_pe_reads_on_strand {
 			&$write_alignment($data->{outbam}, $best);
 			
 			# increment counters
-			$data->{uniqueCount}++;
-			$data->{duplicateCount} += scalar(@sorted);
+			$uniq_c++ if not $best->reversed;
+			foreach (@sorted) {
+				$dup_c++ if not $_->reversed;
+			}
 			
 			# write marked remaining duplicates
 			if ($markdups) {
 				foreach my $a (@sorted) {
-					$data->{dupkeepers}{$a->qname};
+					$data->{dupkeepers}{$a->qname} += 1;
 					mark_alignment($a);
 					&$write_alignment($data->{outbam}, $a);
 				}
@@ -598,12 +617,15 @@ sub write_pe_reads_on_strand {
 	
 	# write untagged reads
 	if (@untagged) {
-		$data->{untagged} += scalar(@untagged);
 		foreach my $a (@untagged) {
 			$data->{keepers}{$a->qname} += 1; # remember to write pair
 			&$write_alignment($data->{outbam}, $a);
+			$untag_c++ if not $a->reversed; # only forward reads counted
 		}
 	}
+	
+	# return the internal counts
+	return ($uniq_c, $dup_c, $untag_c);
 }
 
 
