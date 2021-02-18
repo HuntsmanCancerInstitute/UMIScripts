@@ -30,7 +30,7 @@ eval {
 	$parallel = 1;
 };
 
-my $VERSION = 1.7;
+my $VERSION = 1.8;
 # version 1.0 - initial version
 # version 1.1 - added option to write the duplicates to second bam file
 # version 1.2 - add marking and parallel processing, make compatible with 
@@ -43,6 +43,7 @@ my $VERSION = 1.7;
 #               this will find inverted pairs that might get tossed, breaking pairs
 # version 1.6 - handle secondary alignments, write program line in bam header 
 # version 1.7 - improve alignment counting methodologies
+# version 1.8 - improve samtools cat command
 
 unless (@ARGV) {
 	print <<END;
@@ -336,7 +337,10 @@ sub deduplicate_multithread {
 			die "unable to write temporary sam file\n";
 		$fh->print($htext);
 		$fh->close;
-		my $command = sprintf "%s cat -h %s -o %s ", $sam_app, $samfile, $outfile;
+		
+		# prepare a samtools concatenate command
+		my $command = sprintf "%s cat --no-PG --threads %s -h %s -o %s ", 
+			$sam_app, $cpu, $samfile, $outfile;
 		$command .= join(' ', @targetfiles);
 		print " executing $sam_app cat to merge children...\n";
 		if (system($command)) {
