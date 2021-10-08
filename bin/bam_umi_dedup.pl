@@ -146,7 +146,18 @@ if (not $sam_app and $cpu > 1) {
 	print "A samtools application must be available when running multiple forks! Disabling\n";
 	$cpu = 1;
 } 
-
+my $sam_version;
+if ($sam_app and $cpu > 1) {
+	my $sam_help = qx($sam_app 2>&1);
+	if ($sam_help =~ /Version: 1\.(\d+) /) {
+		$sam_version = $1;
+	}
+	else {
+		print "Unrecognized samtools version! Disabling\n";
+		$sam_app = '';
+		$cpu = 1;
+	}
+}
 
 
 
@@ -176,6 +187,7 @@ $htext .= sprintf("\@PG\tID:bam_umi_dedup\tVN:%s\tCL:%s", $VERSION, $0);
 $htext .= " --pe" if $paired;
 $htext .= " --mark" if $markdups;
 $htext .= " --secondary" if $keep_secondary;
+$htext .= " --samtools $sam_app" if ($cpu > 1 and $sam_app);
 $htext .= " --bam $BAM_ADAPTER --in $infile --out $outfile\n";
 
 
@@ -222,7 +234,21 @@ if ($untagCount) {
 }
 
 
-# end
+#### End
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # process on chromosomes
@@ -367,10 +393,12 @@ sub deduplicate_multithread {
 		$fh->close;
 		
 		# prepare a samtools concatenate command
-		my $command = sprintf "%s cat --no-PG --threads %s -h %s -o %s ", 
-			$sam_app, $cpu, $samfile, $outfile;
+		my $command = sprintf "%s cat -h %s -o %s ", $sam_app, $samfile, $outfile;
+		if ($sam_version >= 10) {
+			$command .= sprintf "--no-PG --threads %s ", $cpu;
+		}
 		$command .= join(' ', @targetfiles);
-		print " executing $sam_app cat to merge children...\n";
+		print " executing '$sam_app cat' to merge children...\n";
 		if (system($command)) {
 			die "something went wrong with command '$command'!\n";
 		}
