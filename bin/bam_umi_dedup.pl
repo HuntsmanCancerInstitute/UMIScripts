@@ -23,14 +23,8 @@ use Bio::ToolBox::db_helper 1.50 qw(
 );
 # this can import either Bio::DB::Sam or Bio::DB::HTS depending on availability
 # this script is mostly bam adapter agnostic
-my $parallel;
-eval {
-	# check for parallel support
-	require Parallel::ForkManager;
-	$parallel = 1;
-};
 
-my $VERSION = 1.8;
+my $VERSION = 1.9;
 # version 1.0 - initial version
 # version 1.1 - added option to write the duplicates to second bam file
 # version 1.2 - add marking and parallel processing, make compatible with 
@@ -44,9 +38,26 @@ my $VERSION = 1.8;
 # version 1.6 - handle secondary alignments, write program line in bam header 
 # version 1.7 - improve alignment counting methodologies
 # version 1.8 - improve samtools cat command
+# version 1.9 - improve help and option checking
 
-unless (@ARGV) {
-	print <<END;
+#### Inputs
+my $parallel;
+eval {
+	# check for parallel support
+	require Parallel::ForkManager;
+	$parallel = 1;
+};
+my $infile;
+my $outfile;
+my $markdups;
+my $paired;
+my $keep_secondary = 0;
+my $cpu = $parallel ? 4 : 1;
+my $no_sam;
+my $help;
+my $sam_app = sprintf("%s", which 'samtools');
+
+my $description = <<END;
 
 A script to remove duplicates based on a Unique Molecular Index (UMI) code.
 Alignments that match the same coordinate are checked for the random UMI code 
@@ -76,51 +87,69 @@ discarded. Secondary alignments may be kept and de-duplicated if specified;
 however, no guarantee is made that the same sequence read (out of multiple 
 with the same UMI) will be retained across all primary and secondary alignments.
 
-USAGE:  bam_umi_dedup.pl --in in.bam --out out.bam
+END
+
+my $usage = <<END;   
 
 VERSION: $VERSION
-     
+
+USAGE:  bam_umi_dedup.pl --in in.bam --out out.bam
+
 OPTIONS:
-    -i | --in <file>    The input bam file, should be sorted and indexed
-    -o | --out <file>   The output bam file.
-    -p | --pe           The bam file consists of paired-end alignments
+    -i --in <file>      The input bam file, should be sorted and indexed
+    -o --out <file>     The output bam file.
+    -p --pe             The bam file consists of paired-end alignments
                           Only properly-paired alignments are retained
-    -m | --mark         Mark duplicates instead of discarding
-    -s | --secondary    Keep secondary (multi-hit) reads
-    -c | --cpu <int>    Specify the number of threads to use (4) 
+    -m --mark           Mark duplicates instead of discarding
+    -s --secondary      Keep secondary (multi-hit) reads
+    -c --cpu <int>      Specify the number of threads to use ($cpu) 
+    --samtools <path>   Path to samtools >= 1.10 ($sam_app)
+    -h --help           Display help
 
 END
-	exit;
+
+
+#### Parse Inputs
+unless (@ARGV) {
+	print $usage;
+	exit 0;
 }
-
-
-#### Inputs
-my $infile;
-my $outfile;
-my $markdups;
-my $paired;
-my $keep_secondary = 0;
-my $cpu;
-my $no_sam;
-my @program_options = @ARGV;
 GetOptions( 
-	'in=s'       => \$infile, # the input bam file path
-	'out=s'      => \$outfile, # name of output file 
-	'pe!'        => \$paired, # paired-end alignments
-	'mark!'      => \$markdups, # mark duplicates instead of remove
-	'secondary!' => \$keep_secondary, # keep secondary alignments 
-	'cpu=i'      => \$cpu, # number of cpu cores to use
-	'bam=s'      => \$BAM_ADAPTER, # specifically set the bam adapter, advanced!
-	'nosam!'     => \$no_sam, # avoid using external sam adapter, advanced!
+	'i|in=s'        => \$infile, # the input bam file path
+	'o|out=s'       => \$outfile, # name of output file 
+	'p|pe!'         => \$paired, # paired-end alignments
+	'm|mark!'       => \$markdups, # mark duplicates instead of remove
+	's|secondary!'  => \$keep_secondary, # keep secondary alignments 
+	'c|cpu=i'       => \$cpu, # number of cpu cores to use
+	'samtools=s'    => \$sam_app, # path to samtools
+	'bam=s'         => \$BAM_ADAPTER, # specifically set the bam adapter, advanced!
+	'nosam!'        => \$no_sam, # avoid using external sam adapter, advanced!
+	'h|help!'       => \$help, # print help
 ) or die " unrecognized option(s)!! please refer to the help documentation\n\n";
 
-if ($parallel and not defined $cpu) {
-	$cpu = 4;
+if ($help) {
+	print $description;
+	print $usage;
+	exit 0;
 }
-if ($cpu and not $parallel) {
-	warn "must install Parallel::ForkManager to multi-thread!\n";
+unless ($infile) {
+	die "must provide an input file name!\n";
+}
+unless ($outfile) {
+	die "must provide an output file name!\n";
+}
+if ($cpu > 1 and not $parallel) {
+	warn "Must install Parallel::ForkManager to run multiple forks! Disabling\n";
 	$cpu = 1;
 }
+if (not $sam_app and $cpu > 1) {
+	print "A samtools application must be available when running multiple forks! Disabling\n";
+	$cpu = 1;
+} 
+
+
+
+
 
 ### Open bam files
 # input bam file
@@ -328,7 +357,6 @@ sub deduplicate_multithread {
 
 	# attempt to use external samtools to merge the bam files
 	# this should be faster than going through Perl and bam adapters
-	my $sam_app = which('samtools');
 	if ($sam_app and not $no_sam) {
 		# write a temporary sam header with updated text
 		my $samfile = $outfile;
