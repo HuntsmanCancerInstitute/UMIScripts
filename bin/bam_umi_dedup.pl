@@ -54,7 +54,6 @@ my $umi_location = 'name';
 my $markdups;
 my $mismatch = 1;
 my $indel_score = 10;
-my $max_depth = 5000;
 my $opt_distance = 0;
 my $name_coordinates;
 my $cpu = 4;
@@ -135,7 +134,6 @@ OPTIONS:
     --coord <string>      Provide the tile:X:Y integer 1-base positions in the 
                             read name for optical checking. For Illumina CASAVA 1.8 
                             7-element names, this is 5:6:7 (default)
-    --depth <int>         Maximum depth allowed at any given position ($max_depth)
     -c --cpu <int>        Specify the number of forks to use ($cpu) 
     --samtools <path>     Path to samtools ($sam_app)
     -h --help             Display full description and help
@@ -157,7 +155,6 @@ GetOptions(
 	'indel=i'       => \$indel_score, # weight for indel scoring in calculating distance
 	'd|distance=i'  => \$opt_distance, # optical pixel distance
 	'coord=s'       => \$name_coordinates, # tile:X:Y name positions
-	'maxdepth=i'    => \$max_depth, # maximum allowed depth at any one position
 	'c|cpu=i'       => \$cpu, # number of cpu cores to use
 	'p|pe!'         => \$paired, # legacy flag for paired-end alignments
 	's|secondary!'  => \$keep_secondary, # legacy flag to keep secondary alignments 
@@ -676,12 +673,7 @@ sub write_se_reads_on_strand {
 	# put the reads into a hash based on tag identifer
 	my %tag2reads;
 	my @untagged;
-	my $count = 0;
 	while (my $a = shift @{ $nonopt_reads }) {
-	
-		# count alignments at this position
-# 		$count++;
-# 		next if ($count > $max_depth);
 	
 		# collect UMI
 		my $tag = &$get_umi($a);
@@ -693,12 +685,6 @@ sub write_se_reads_on_strand {
 			push @untagged, $a;
 		}
 	}
-
-	# warning if exceeded maximum depth
-# 	if ($count > $max_depth) {
-# 		printf STDERR " ! Depth of %d exceeded threshold at %s:%d, discarded %d reads\n", $count, 
-# 			$sam->target_name( (values %tag2reads)[0]->[0]->tid ), $data->{position}, $count - $max_depth;
-# 	}
 
 	# first collapse UMI tags based on mismatches
 	if ($mismatch and scalar(keys %tag2reads) > 1) {
@@ -836,11 +822,7 @@ sub write_pe_reads_on_strand {
 	# then collect the UMI codes from remaining alignments
 	my %tag2reads; # barcode-to-alignment hash
 	my @untagged;
-	my $count = 0;
 	while (my $a = shift @{ $nonopt_reads }) {
-		# count alignments at this position
-# 		$count++;
-# 		next if ($count > $max_depth);
 		# get UMI
 		my $tag = &$get_umi($a);
 		if (defined $tag) {
@@ -851,12 +833,6 @@ sub write_pe_reads_on_strand {
 			push @untagged, $a;
 		}
 	}
-	
-	# warning if exceeded maximum depth
-# 	if ($count > $max_depth) {
-# 		printf STDERR " ! Depth of %d exceeded threshold at %s:%d\n", $count, 
-# 			$sam->target_name( (values %tag2reads)[0]->[0]->tid ), $data->{position};
-# 	}
 	
 	# first collapse UMI tags based on mismatches
 	if ($mismatch and scalar(keys %tag2reads) > 1) {
