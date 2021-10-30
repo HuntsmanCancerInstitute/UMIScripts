@@ -15,7 +15,7 @@ use strict;
 use Getopt::Long;
 use File::Which;
 use IO::File;
-use List::Util qw(sum max);
+use List::Util qw(sum min max);
 use Parallel::ForkManager;
 use Text::Levenshtein::Flexible;
 	# this Levenshtein module is preferred over others available specifically 
@@ -53,12 +53,18 @@ my $umi_location = 'name';
 my $markdups;
 my $mismatch = 1;
 my $indel_score = 10;
-my $paired;
-my $keep_secondary = 0;
+my $max_depth = 5000;
+my $opt_distance = 0;
+my $name_coordinates;
 my $cpu = 4;
 my $no_sam;
+my $paired;
+my $keep_secondary = 0;
 my $help;
 my $sam_app = sprintf("%s", which 'samtools');
+my $tilepos;
+my $xpos;
+my $ypos;
 
 my $description = <<END;
 
@@ -85,7 +91,9 @@ sequence tags can tolerate mismatches up to the indicated number;
 insertions or deletions are not tolerated. In general, longer UMI sequences
 should tolerate more mismatches, but at the risk of missing optimal
 matches. Increased tolerance results in decreased UMI-unique alignments.
-Alignments without a detectable UMI flag are simply written out.
+Alignments without a detectable UMI flag are simply written out. A maximum 
+threshold depth is imposed at extreme positions to avoid excessive runtimes; 
+excess alignments are discarded.
 
 Selection criteria amongst UMI-duplicates include the mapping qualities of
 the alignment (and possibly mate pair using tag 'MQ' if present) or the sum
@@ -120,7 +128,14 @@ OPTIONS:
                             Typically 'RX'. Default 'name'.
     -m --mark             Mark duplicates instead of discarding
     -t --tolerance <int>  Mismatch tolerance ($mismatch)
-    -c --cpu <int>        Specify the number of threads to use ($cpu) 
+    -d --distance <int>   Set optical duplicate distance threshold.
+                            Use 100 for unpatterned flowcell (HiSeq) or 
+                            2500 for patterned flowcell (NovaSeq). Default 0.
+    --coord <string>      Provide the tile:X:Y integer 1-base positions in the 
+                            read name for optical checking. For Illumina CASAVA 1.8 
+                            7-element names, this is 5:6:7 (default)
+    --depth <int>         Maximum depth allowed at any given position ($max_depth)
+    -c --cpu <int>        Specify the number of forks to use ($cpu) 
     --samtools <path>     Path to samtools ($sam_app)
     -h --help             Display full description and help
 
@@ -136,12 +151,15 @@ GetOptions(
 	'i|in=s'        => \$infile, # the input bam file path
 	'o|out=s'       => \$outfile, # name of output file 
 	'u|umi=s'       => \$umi_location, # the location where the UMI tag is stored
-	'p|pe!'         => \$paired, # legacy flag for paired-end alignments
 	'm|mark!'       => \$markdups, # set duplicate flag instead of removing
 	't|tolerance=i' => \$mismatch, # number mismatches allowed
 	'indel=i'       => \$indel_score, # weight for indel scoring in calculating distance
-	's|secondary!'  => \$keep_secondary, # legacy flag to keep secondary alignments 
+	'd|distance=i'  => \$opt_distance, # optical pixel distance
+	'coord=s'       => \$name_coordinates, # tile:X:Y name positions
+	'maxdepth=i'    => \$max_depth, # maximum allowed depth at any one position
 	'c|cpu=i'       => \$cpu, # number of cpu cores to use
+	'p|pe!'         => \$paired, # legacy flag for paired-end alignments
+	's|secondary!'  => \$keep_secondary, # legacy flag to keep secondary alignments 
 	'samtools=s'    => \$sam_app, # path to samtools
 	'bam=s'         => \$BAM_ADAPTER, # specifically set the bam adapter, advanced!
 	'nosam!'        => \$no_sam, # avoid using external sam adapter, advanced!
@@ -159,6 +177,9 @@ unless ($infile) {
 unless ($outfile) {
 	die " Must provide an output file name!\n";
 }
+unless ($outfile =~ /\.bam$/) {
+	$outfile .= '.bam';
+}
 undef $sam_app if $no_sam;
 my $sam_version;
 if ($sam_app) {
@@ -170,6 +191,23 @@ if ($sam_app) {
 		print " Unrecognized samtools version! Disabling\n";
 		undef $sam_app;
 	}
+}
+if ($name_coordinates) {
+	if ($name_coordinates =~ /(\d):(\d):(\d)/) {
+		# coordinates must be converted to 0-based indices
+		$tilepos = $1 - 1;
+		$xpos = $2 - 1;
+		$ypos = $3 - 1;
+	}
+	else {
+		die " Name coordinate must be integers as tile:X:Y, such as 5:6:7\n";
+	}
+}
+else {
+	# these defaults are for Illumina CASAVA 1.8+ Fastq data in 0-based coordinates
+	$tilepos = 4;
+	$xpos = 5;
+	$ypos = 6;
 }
 
 # which callback to use
@@ -224,6 +262,9 @@ my $htext = $header->text;
 	$htext .= sprintf("VN:%s\tCL:%s", $VERSION, $0);
 	$htext .= " --in $infile --out $outfile --tag $umi_location";
 	$htext .= " --mark" if $markdups;
+	$htext .= " --tolerance $mismatch --indel $indel_score";
+	$htext .= " --distance $opt_distance" if $opt_distance;
+	$htext .= " --coord $name_coordinates" if $name_coordinates;
 	$htext .= " --samtools $sam_app" if $sam_app;
 	$htext .= " --bam $BAM_ADAPTER\n";
 }
@@ -235,13 +276,15 @@ my $htext = $header->text;
 #### Deduplicate
 
 #initialize counters
-my $totalSingleCount  = 0;
-my $uniqueSingleCount = 0;
-my $dupSingleCount    = 0;
-my $totalPairedCount  = 0;
-my $uniquePairedCount = 0;
-my $dupPairedCount    = 0;
-my $untagCount        = 0;
+my $totalSingleCount    = 0;
+my $opticalSingleCount  = 0;
+my $uniqueSingleCount   = 0;
+my $dupSingleCount      = 0;
+my $totalPairedCount    = 0;
+my $opticalPairedCount  = 0;
+my $uniquePairedCount   = 0;
+my $dupPairedCount      = 0;
+my $untagCount          = 0;
 
 # deduplicate in single or multi-thread
 my $outbam; # I need to return the final output bam to main:: and let the normal 
@@ -272,6 +315,11 @@ if ($totalSingleCount) {
 	$dupSingleCount, 
 	($dupSingleCount/$totalSingleCount) * 100, 
 	$markdups ? 'marked' : 'discarded';
+	if ($opticalSingleCount) {
+		printf " %12s (%.1f%%) optical duplicate single-end alignments were %s\n", 
+			$opticalSingleCount, ($opticalSingleCount/$totalSingleCount) * 100,
+			$markdups ? 'marked' : 'discarded';
+	}
 }
 
 if ($totalPairedCount) {
@@ -285,6 +333,11 @@ if ($totalPairedCount) {
 	$dupPairedCount, 
 	($dupPairedCount/$totalPairedCount) * 100, 
 	$markdups ? 'marked' : 'discarded';
+	if ($opticalPairedCount) {
+		printf " %12s (%.1f%%) optical duplicate paired-end alignments were %s\n", 
+			$opticalPairedCount, ($opticalPairedCount/$totalPairedCount) * 100,
+			$markdups ? 'marked' : 'discarded';
+	}
 }
 
 if ($untagCount) {
@@ -318,13 +371,24 @@ sub deduplicate_multithread {
 		my ($pid, $exit_code, $ident, $exit_signal, $core_dump, $data) = @_;
 		
 		# add child counts to global values
-		$totalSingleCount  += $data->{totalSingleCount};
-		$uniqueSingleCount += $data->{uniqueSingleCount};
-		$dupSingleCount    += $data->{dupSingleCount};
-		$totalPairedCount  += $data->{totalPairedCount};
-		$uniquePairedCount += $data->{uniquePairedCount};
-		$dupPairedCount    += $data->{dupPairedCount};
-		$untagCount        += $data->{untagCount};
+		$totalSingleCount   += $data->{totalSingleCount};
+		$opticalSingleCount += $data->{opticalSingleCount};
+		$uniqueSingleCount  += $data->{uniqueSingleCount};
+		$dupSingleCount     += $data->{dupSingleCount};
+		$totalPairedCount   += $data->{totalPairedCount};
+		$opticalPairedCount += $data->{opticalPairedCount};
+		$uniquePairedCount  += $data->{uniquePairedCount};
+		$dupPairedCount     += $data->{dupPairedCount};
+		$untagCount         += $data->{untagCount};
+		
+		# check coordinate errors
+		if ($opt_distance and $data->{coordErrorCount} > 100000) {
+			# 100K is entirely arbitrary, want to avoid random, occasional errors
+			print " Too many alignments have read name tile coordinate errors!\n Disabling optical duplicate checking\n";
+			# this won't have an effect on currently running forks, but at least we'll 
+			# stop this for subsequent forks
+			$opt_distance = 0;
+		}
 	});
 	
 	# prepare targets and names
@@ -368,17 +432,21 @@ sub deduplicate_multithread {
 		my $data = {
 			position            => -1,
 			totalSingleCount    => 0,
+			opticalSingleCount  => 0,
 			uniqueSingleCount   => 0,
 			dupSingleCount      => 0,
 			totalPairedCount    => 0,
+			opticalPairedCount  => 0,
 			uniquePairedCount   => 0,
 			dupPairedCount      => 0,
 			untagCount          => 0,
+			coordErrorCount     => 0,
 			outbam              => $tempbam,
 			single_reads        => [],
 			paired_reads        => [],
 			keepers             => {},
 			duplicates          => {},
+			opt_duplicates      => {},
 			calculator          => $Calculator
 		};
 	
@@ -391,6 +459,20 @@ sub deduplicate_multithread {
 			write_reads($data);
 		}
 		
+		# warnings
+		if (scalar keys %{$data->{keepers}}) {
+			printf " ! %d missing unmatched mate pair alignments on %s\n", 
+				scalar keys %{$data->{duplicates}}, $sam->target_name($tid);
+		}
+		if (scalar keys %{$data->{duplicates}}) {
+			printf " ! %d missing unmatched duplicate mate pair alignments on %s\n", 
+				scalar keys %{$data->{duplicates}}, $sam->target_name($tid);
+		}
+		if (scalar keys %{$data->{opt_duplicates}}) {
+			printf " ! %d missing unmatched optical-duplicate mate pair alignments on %s\n", 
+				scalar keys %{$data->{opt_duplicates}}, $sam->target_name($tid);
+		}
+		
 		# finish and return to parent
 		delete $data->{position};
 		delete $data->{outbam};
@@ -398,6 +480,7 @@ sub deduplicate_multithread {
 		delete $data->{paired_reads};
 		delete $data->{keepers};
 		delete $data->{duplicates};
+		delete $data->{opt_duplicates};
 		delete $data->{calculator};
 		undef $tempbam;
 		undef $Calculator;
@@ -546,13 +629,60 @@ sub write_reads {
 sub write_se_reads {
 	my $data = shift;
 	
+	# split up based on end point and strand
+	my %fends; # forward ends
+	my %rends; # reverse ends
+	while (my $a = shift @{$data->{single_reads}}) {
+		my $end = $a->calend; 
+		if ($a->reversed) {
+			$rends{$end} ||= [];
+			push @{ $rends{$end} }, $a;
+		}
+		else {
+			$fends{$end} ||= [];
+			push @{ $fends{$end} }, $a;
+		}
+	}
+	
+	# write forward reads
+	foreach my $pos (sort {$a <=> $b} keys %fends){
+		write_se_reads_on_strand($data, $fends{$pos});
+	}
+
+	# write reverse reads
+	foreach my $pos (sort {$a <=> $b} keys %rends){
+		write_se_reads_on_strand($data, $rends{$pos});
+	}
+}
+
+
+sub write_se_reads_on_strand {
+	my ($data, $reads) = @_; 
+		# data reference and array reference of alignment reads
+
+	# collect the non-optical duplicate reads
+	my ($nonopt_reads, $optdup_reads, $error);
+	if ($opt_distance) {
+		($nonopt_reads, $optdup_reads, $error) = identify_optical_duplicates($reads);
+		$data->{opticalSingleCount} += scalar @$optdup_reads;
+		$data->{coordErrorCount} += $error;
+	}
+	else {
+		# blindly take everything
+		$nonopt_reads = $reads;
+	}
+	
 	# put the reads into a hash based on tag identifer
 	my %tag2reads;
 	my @untagged;
-	while (my $a = shift @{ $data->{single_reads} }) {
-		
-		# first check for any existing if supplemental or secondary
-		# otherwise collect UMI
+	my $count = 0;
+	while (my $a = shift @{ $nonopt_reads }) {
+	
+		# count alignments at this position
+# 		$count++;
+# 		next if ($count > $max_depth);
+	
+		# collect UMI
 		my $tag = &$get_umi($a);
 		if (defined $tag) {
 			$tag2reads{$tag} ||= [];
@@ -562,12 +692,18 @@ sub write_se_reads {
 			push @untagged, $a;
 		}
 	}
-	
+
+	# warning if exceeded maximum depth
+# 	if ($count > $max_depth) {
+# 		printf STDERR " ! Depth of %d exceeded threshold at %s:%d, discarded %d reads\n", $count, 
+# 			$sam->target_name( (values %tag2reads)[0]->[0]->tid ), $data->{position}, $count - $max_depth;
+# 	}
+
 	# first collapse UMI tags based on mismatches
 	if ($mismatch and scalar(keys %tag2reads) > 1) {
 		collapse_umi_hash(\%tag2reads, $data->{calculator});
 	}
-	
+
 	# then write out one of each tag
 	foreach my $tag (keys %tag2reads) {
 		if (scalar @{ $tag2reads{$tag} } == 1) {
@@ -583,14 +719,14 @@ sub write_se_reads {
 				sort { ($a->[1] <=> $b->[1]) or ($a->[2] <=> $b->[2]) } 
 				map { [$_, $_->qual, sum($_->qscore)] } 
 				@{ $tag2reads{$tag} };
-			
+		
 			# write the best one
 			&$write_alignment($data->{outbam}, shift @sorted );
-			
+		
 			# update counters
 			$data->{uniqueSingleCount}++; # accepted read 
 			$data->{dupSingleCount} += scalar(@sorted); # bad reads
-			
+		
 			# write remaining as necessary
 			if ($markdups) {
 				foreach my $a (@sorted) {
@@ -598,6 +734,14 @@ sub write_se_reads {
 					&$write_alignment($data->{outbam}, $a);
 				}
 			}
+		}
+	}
+	
+	# write optical duplicate reads
+	if ($markdups and scalar @$optdup_reads) {
+		foreach my $a (@$optdup_reads) {
+			mark_alignment($a);
+			&$write_alignment($data->{outbam}, $a);
 		}
 	}
 	
@@ -645,14 +789,11 @@ sub write_pe_reads_on_strand {
 	my ($data, $reads) = @_; 
 		# data reference and array reference of alignment reads
 	
-	# must sort the bams by the barcode
-	my %tag2reads; # barcode-to-alignment hash
-	my @untagged;
-	foreach my $a (@$reads) {
+	
+	# first identify possible mates of previously marked duplicates
+	my @nondup_reads;
+	while (my $a = shift @$reads) {
 		my $name = $a->qname;
-			# we will count those weird situations here where a reverse read came first
-			# and was processed first, leaving a forward read name in the keeper hash
-			# where it might not get counted normally - so we do so here 
 		if (exists $data->{keepers}{$name}) {
 			&$write_alignment($data->{outbam}, $a);
 			delete $data->{keepers}{$name};
@@ -666,17 +807,55 @@ sub write_pe_reads_on_strand {
 			delete $data->{duplicates}{$name};
 			$data->{dupPairedCount}++; 
 		}
+		elsif (exists $data->{opt_duplicates}{$name}) {
+			if ($markdups) {
+				mark_alignment($a);
+				&$write_alignment($data->{outbam}, $a);
+			}
+			delete $data->{opt_duplicates}{$name};
+			$data->{opticalPairedCount}++; 
+		}
 		else {
-			my $tag = &$get_umi($a);
-			if (defined $tag) {
-				$tag2reads{$tag} ||= [];
-				push @{ $tag2reads{$tag} }, $a;
-			}
-			else {
-				push @untagged, $a;
-			}
+			push @nondup_reads, $a;
 		}
 	}
+	
+	# collect the optical duplicate reads
+	my ($nonopt_reads, $optdup_reads, $error);
+	if ($opt_distance) {
+		($nonopt_reads, $optdup_reads, $error) = identify_optical_duplicates(\@nondup_reads);
+		$data->{optical} += scalar @$optdup_reads;
+		$data->{coordErrorCount} += $error;
+	}
+	else {
+		# blindly take everything
+		$nonopt_reads = $reads;
+	}
+	
+	# then collect the UMI codes from remaining alignments
+	my %tag2reads; # barcode-to-alignment hash
+	my @untagged;
+	my $count = 0;
+	while (my $a = shift @{ $nonopt_reads }) {
+		# count alignments at this position
+# 		$count++;
+# 		next if ($count > $max_depth);
+		# get UMI
+		my $tag = &$get_umi($a);
+		if (defined $tag) {
+			$tag2reads{$tag} ||= [];
+			push @{ $tag2reads{$tag} }, $a;
+		}
+		else {
+			push @untagged, $a;
+		}
+	}
+	
+	# warning if exceeded maximum depth
+# 	if ($count > $max_depth) {
+# 		printf STDERR " ! Depth of %d exceeded threshold at %s:%d\n", $count, 
+# 			$sam->target_name( (values %tag2reads)[0]->[0]->tid ), $data->{position};
+# 	}
 	
 	# first collapse UMI tags based on mismatches
 	if ($mismatch and scalar(keys %tag2reads) > 1) {
@@ -728,7 +907,21 @@ sub write_pe_reads_on_strand {
 		}
 	}
 	
-	# write untagged reads
+	# write optical duplicate reads, and remember them so to write its pair
+	if ($markdups and scalar @$optdup_reads) {
+		foreach my $a (@$optdup_reads) {
+			$data->{opt_duplicates}{$a->qname} += 1;
+			mark_alignment($a);
+			&$write_alignment($data->{outbam}, $a);
+		}
+	}
+	elsif (scalar @$optdup_reads) {
+		foreach my $a (@$optdup_reads) {
+			$data->{opt_duplicates}{$a->qname} += 1;
+		}
+	}
+	
+	# write untagged reads, and remember them so to write its pair
 	if (@untagged) {
 		$data->{untagCount} += scalar(@untagged);
 		foreach my $a (@untagged) {
@@ -737,6 +930,169 @@ sub write_pe_reads_on_strand {
 		}
 	}
 }
+
+
+sub identify_optical_duplicates {
+	my $alignments = shift;
+	my $data = shift || undef; # this is only for reporting distances
+	
+	# check for only one alignment and quickly return
+	if (scalar @$alignments == 1) {
+		return ($alignments, []);
+	}
+	
+	# extract tile and coordinates from each alignment given and sort 
+	my %tile2alignment;
+	my @dups;
+	my @nondups;
+	my $coord_error = 0;
+	foreach my $a (@$alignments) {
+		my @bits = split(':', $a->qname);
+		if (
+			$#bits < $ypos or (
+				not defined $bits[$tilepos] and 
+				not defined $bits[$xpos] and 
+				not defined $bits[$ypos]
+			)
+		) {
+			# not able to identify coordinates in the alignment name
+			# record error count and place in nondups array
+			$coord_error++;
+			push @nondups, $a;
+		}
+		else {
+			my $rg = $a->aux_get("RG") || '1';
+			my $rgtile = join('.', $rg, $bits[$tilepos]);
+			$tile2alignment{$rgtile} ||= [];
+			# each item in the array is another array of [x, y, $a]
+			push @{$tile2alignment{$rgtile}}, [$bits[$xpos], $bits[$ypos], $a];
+		}
+	}
+	
+	# check whether we have actionable alignments
+	if (scalar keys %tile2alignment == 0) {
+		# couldn't find any coordinates!
+		return (\@nondups, \@dups, $coord_error);
+	}
+	
+	
+	
+	# walk through each read-group tile
+	while (my ($rgtile, $rgtile_alnts) = each %tile2alignment) {
+		# check the number of alignments
+		if (scalar @$rgtile_alnts == 1) {
+			# we only have one, so it's a nondup
+			push @nondups, $rgtile_alnts->[0][2];
+		}
+		else {
+			# we have more than one so must sort through
+			
+			# sort by increasing X coordinate
+			my @spots = sort {$a->[0] <=> $b->[0]} @$rgtile_alnts;
+			# collect the deltas from one spot to the next on the X axis
+			# start with second sorted spot and subtract the one before it
+			my @xdiffs = map { $spots[$_]->[0] - $spots[$_-1]->[0] } (1..$#spots);
+			
+			
+			
+			## Check 
+			# working on the assumption here that by definition an optical cluster is 
+			# going to be below the threshold on both axes, and not just one axis
+			# therefore we only need to check the x axis first
+			if (min(@xdiffs) > $opt_distance) {
+				# everything is ok
+				foreach (@spots) {
+					push @nondups, $_->[2];
+				}
+			}
+			else {
+				# two or more spots are too close on X axis, must check out
+				my $first = shift @spots;
+				while (@spots) {
+					if ($spots[0]->[0] - $first->[0] < $opt_distance) {
+						# second is too close to first
+						# keep taking spots until they're no longer close
+						my @closest;
+						push @closest, $first, shift @spots;
+						# continue comparing the next one with the previous one
+						while (
+							scalar @spots and 
+							$spots[0]->[0] - $closest[-1]->[0] < $opt_distance
+						) {
+							push @closest, shift @spots;
+						}
+						
+						## Now must process this X cluster
+						# check Y coordinates by sorting and calculating deltas
+						@closest = sort {$a->[1] <=> $b->[1]} @closest;
+						my @ydiffs = map { $closest[$_]->[1] - $closest[$_-1]->[1] } (1..$#closest);
+						
+						# check the Y deltas in this X cluster
+						if (min(@ydiffs) > $opt_distance) {
+							# they're all good
+							foreach (@closest) {
+								push @nondups, $_->[2];
+							}
+						}
+						else {
+							# we definitely have some XY clusters within threshold
+							my $xyfirst = shift @closest;
+							while (@closest) {
+								if ($closest[0]->[1] - $xyfirst->[1] < $opt_distance) {
+									# these two are close
+									my @clustered;
+									push @clustered, $xyfirst, shift @closest;
+									# continue compareing the next one with the previous one
+									while (
+										scalar @closest and 
+										$closest[0]->[1] - $clustered[-1]->[1] < $opt_distance
+									) {
+										push @clustered, shift @closest;
+									}
+									# done, no more
+									
+									# take the first one as pseudo random chosen one
+									push @nondups, $clustered[0]->[2];
+									# remainder are optical duplicates
+									for my $i (1..$#clustered) {
+										push @dups, $clustered[$i]->[2];
+									}
+									
+									## prepare for next round
+									$xyfirst = shift @closest || undef;
+								}
+								else {
+									# this one is ok
+									push @nondups, $xyfirst->[2];
+									$xyfirst = shift @closest;
+								}
+							}
+							
+							# check for last remaining alignment
+							push @nondups, $xyfirst->[2] if defined $xyfirst;
+						}
+						
+						## Prepare for next round
+						$first = shift(@spots) || undef;
+					}
+					else {
+						# first is ok
+						push @nondups, $first->[2];
+						$first = shift @spots;
+					}
+					# continue
+				}
+				
+				# check for last remaining alignment
+				push @nondups, $first->[2] if defined $first;
+			}
+		}
+	}
+	
+	# finished
+	return (\@nondups, \@dups, $coord_error);
+}
+
 
 sub get_umi_from_name {
 	# get UMI from read name
