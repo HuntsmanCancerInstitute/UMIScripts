@@ -16,6 +16,7 @@ use Getopt::Long;
 use File::Which;
 use IO::File;
 use List::Util qw(sum max);
+use Parallel::ForkManager;
 use Bio::ToolBox::db_helper 1.50 qw(
 	open_db_connection 
 	low_level_bam_fetch
@@ -24,7 +25,7 @@ use Bio::ToolBox::db_helper 1.50 qw(
 # this can import either Bio::DB::Sam or Bio::DB::HTS depending on availability
 # this script is mostly bam adapter agnostic
 
-my $VERSION = 1.9;
+my $VERSION = 2.0;
 # version 1.0 - initial version
 # version 1.1 - added option to write the duplicates to second bam file
 # version 1.2 - add marking and parallel processing, make compatible with 
@@ -41,18 +42,13 @@ my $VERSION = 1.9;
 # version 1.9 - improve help and option checking
 
 #### Inputs
-my $parallel;
-eval {
-	# check for parallel support
-	require Parallel::ForkManager;
-	$parallel = 1;
-};
 my $infile;
 my $outfile;
+my $umi_location = 'name';
 my $markdups;
 my $paired;
 my $keep_secondary = 0;
-my $cpu = $parallel ? 4 : 1;
+my $cpu = 4;
 my $no_sam;
 my $help;
 my $sam_app = sprintf("%s", which 'samtools');
@@ -64,28 +60,39 @@ Alignments that match the same coordinate are checked for the random UMI code
 in the read name; Reads with the same UMI are sorted and selected for one 
 to be retained. 
 
-UMI codes are extracted from the end of the read name as ":NNNN", where 
-NNNN is a sequence of indeterminate length comprised of [A,T,G,C,N]. 
-See the other scripts in the UMIScripts project for pre-processing the Fastq 
-files prior to alignments, which will append the random UMI code to the read 
-name. This should also work with UMIs extracted with the new Illumina 
-BCL2Fastq v2 software, which are appended to the read name.
+UMI sequences may be embedded in alignments in one of two locations:
+
+  1 Added as an alignment attribute tag, typically the RX tag per 
+    current SAM specifications. This is the standard method, but 
+    requires compatible aligners. UMI sequence qualities (QX tag) 
+    are ignored. 
+
+  2 Appended to the alignment read name as ":NNNN", where NNNN is a 
+    sequence of indeterminate length comprised of [A,T,G,C]. This 
+    is a non-standard method but generally compatible with all aligners.
+    Currently the default method for legacy reasons.
+
+After sorting alignments at a given position by UMI sequence, one representative 
+alignment is selected and the remainder discarded (default) or marked as 
+duplicate (bit flag 0x400) and retained. Alignments without a UMI flag are 
+simply written out.
 
 For single-end alignments, selection criteria include mapping quality and the 
 sum of read base qualities. For paired-end alignments, selection criteria include 
-the mapping qualities of the forward and possibly reverse mate alignments (using tag 
-'MQ' if present) and the base qualities of the forward and possibly reverse mate 
-alignments (using the samtools fixmate tag 'ms'). 
+the mapping qualities of the forward and possibly reverse mate alignments (using 
+tag 'MQ' if present) and the base qualities of the forward and possibly reverse 
+mate alignments (using the samtools fixmate tag 'ms'). 
 
-Duplicate alignments by default are discarded, or they may be optionally 
-marked as duplicate (bit flag 0x400) and retained.
+Bam files must be sorted by coordinate. Bam files may be indexed as necessary.
+Unmapped (flag 0x4) alignments are silently discarded. Read groups (tag RG) are
+ignored; de-duplication should be done with only one read group per Bam file.
 
-Bam files must be sorted by coordinate. Bam files will be indexed as necessary.
-
-Unaligned (flag 0x4) and supplementary (flag 0x800) reads are silently 
-discarded. Secondary alignments may be kept and de-duplicated if specified; 
-however, no guarantee is made that the same sequence read (out of multiple 
-with the same UMI) will be retained across all primary and secondary alignments.
+DISCLAIMER: Alignments are de-duplicated solely on alignment coordinates and the
+UMI sequences of the alignments at the current position, as well as properly
+paired mate pairs. No guarantees are made for maintaining the same molecule
+between secondary, supplementary (chimeric), and mate pair alignments on
+separate chromosomes. A unique Molecule Identifier (tag MI) is not calculated.
+These results may be sufficient for most applications, but not all.
 
 END
 
@@ -97,14 +104,13 @@ USAGE:  bam_umi_dedup.pl --in in.bam --out out.bam
 
 OPTIONS:
     -i --in <file>      The input bam file, should be sorted and indexed
-    -o --out <file>     The output bam file.
-    -p --pe             The bam file consists of paired-end alignments
-                          Only properly-paired alignments are retained
+    -o --out <file>     The output bam file
+    -t --tag <string>   The location of the UMI sequence. See description.
+                          Typically 'RX'. Default 'name'.
     -m --mark           Mark duplicates instead of discarding
-    -s --secondary      Keep secondary (multi-hit) reads
     -c --cpu <int>      Specify the number of threads to use ($cpu) 
-    --samtools <path>   Path to samtools >= 1.10 ($sam_app)
-    -h --help           Display help
+    --samtools <path>   Path to samtools ($sam_app)
+    -h --help           Display full description and help
 
 END
 
@@ -117,15 +123,16 @@ unless (@ARGV) {
 GetOptions( 
 	'i|in=s'        => \$infile, # the input bam file path
 	'o|out=s'       => \$outfile, # name of output file 
-	'p|pe!'         => \$paired, # paired-end alignments
-	'm|mark!'       => \$markdups, # mark duplicates instead of remove
-	's|secondary!'  => \$keep_secondary, # keep secondary alignments 
+	't|tag=s'       => \$umi_location, # the location where the UMI tag is stored
+	'p|pe!'         => \$paired, # legacy flag for paired-end alignments
+	'm|mark!'       => \$markdups, # set duplicate flag instead of removing
+	's|secondary!'  => \$keep_secondary, # legacy flag to keep secondary alignments 
 	'c|cpu=i'       => \$cpu, # number of cpu cores to use
 	'samtools=s'    => \$sam_app, # path to samtools
 	'bam=s'         => \$BAM_ADAPTER, # specifically set the bam adapter, advanced!
 	'nosam!'        => \$no_sam, # avoid using external sam adapter, advanced!
 	'h|help!'       => \$help, # print help
-) or die " unrecognized option(s)!! please refer to the help documentation\n\n";
+) or die " Unrecognized option(s)!! please refer to the help documentation\n\n";
 
 if ($help) {
 	print $description;
@@ -133,31 +140,38 @@ if ($help) {
 	exit 0;
 }
 unless ($infile) {
-	die "must provide an input file name!\n";
+	die " Must provide an input file name!\n";
 }
 unless ($outfile) {
-	die "must provide an output file name!\n";
+	die " Must provide an output file name!\n";
 }
-if ($cpu > 1 and not $parallel) {
-	warn "Must install Parallel::ForkManager to run multiple forks! Disabling\n";
-	$cpu = 1;
-}
-if (not $sam_app and $cpu > 1) {
-	print "A samtools application must be available when running multiple forks! Disabling\n";
-	$cpu = 1;
-} 
+undef $sam_app if $no_sam;
 my $sam_version;
-if ($sam_app and $cpu > 1) {
+if ($sam_app) {
 	my $sam_help = qx($sam_app 2>&1);
 	if ($sam_help =~ /Version: 1\.(\d+) /) {
 		$sam_version = $1;
 	}
 	else {
-		print "Unrecognized samtools version! Disabling\n";
-		$sam_app = '';
-		$cpu = 1;
+		print " Unrecognized samtools version! Disabling\n";
+		undef $sam_app;
 	}
 }
+
+# which callback to use
+my $get_umi;
+if ($umi_location eq 'name') {
+	print " Collecting UMI from name\n";
+	$get_umi = \&get_umi_from_name;
+}
+elsif ($umi_location =~ /^[A-Z]{2}$/) {
+	print " Collecting UMI from tag $umi_location\n";
+	$get_umi = \&get_umi_from_tag;
+}
+else {
+	die "unrecognized location '$umi_location' for storing UMI sequence!";
+}
+
 
 
 
@@ -184,53 +198,73 @@ else {
 # update headers
 my $htext = $header->text;
 $htext .= sprintf("\@PG\tID:bam_umi_dedup\tVN:%s\tCL:%s", $VERSION, $0);
-$htext .= " --pe" if $paired;
+$htext .= " --in $infile --out $outfile --tag $umi_location";
 $htext .= " --mark" if $markdups;
-$htext .= " --secondary" if $keep_secondary;
-$htext .= " --samtools $sam_app" if ($cpu > 1 and $sam_app);
-$htext .= " --bam $BAM_ADAPTER --in $infile --out $outfile\n";
+$htext .= " --samtools $sam_app" if $sam_app;
+$htext .= " --bam $BAM_ADAPTER\n";
 
 
-# which callback to use
-my $callback = $paired ? \&pe_callback : \&se_callback;
 
+
+
+#### Deduplicate
 
 #initialize counters
-my $totalCount = 0;
-my $uniqueCount  = 0;
-my $duplicateCount   = 0;
-my $untagCount = 0;
-
+my $totalSingleCount  = 0;
+my $uniqueSingleCount = 0;
+my $dupSingleCount    = 0;
+my $totalPairedCount  = 0;
+my $uniquePairedCount = 0;
+my $dupPairedCount    = 0;
+my $untagCount        = 0;
 
 # deduplicate in single or multi-thread
-printf "  - %sing secondary alignments\n", $keep_secondary ? 'Keep' : 'Discard';
-printf "  - Discarding single and improperly paired alignments\n" if $paired;
-print "  - Discarding supplementary alignments\n  - Discarding unmapped alignments\n";
 my $outbam; # I need to return the final output bam to main:: and let the normal 
           # perl exit close it properly, otherwise it crashes hard, and there's 
           # no proper close for the object!!!??????
-if ($parallel and $cpu > 1) {
-	deduplicate_multithread() or die " Something went wrong with de-duplication!\n";
-}
-else {
-	deduplicate_singlethread() or die " Something went wrong with de-duplication!\n";
-}
+deduplicate_multithread() or die " Something went wrong with de-duplication!\n";
 undef $outbam if $outbam;
 
 
-# finish up
-my $type = $paired ? 'paired-alignments' : 'alignments';
+
+
+
+
+#### Finish up
 printf "
- File $infile:
- %12s total mapped $type
- %12s (%.1f%%) UMI-unique $type retained
- %12s (%.1f%%) UMI-duplicate $type %s
+ File %s:
+ %12s total alignments
+", $infile, ($totalSingleCount + $totalPairedCount);
+
+if ($totalSingleCount) {
+	printf  " %12s single-end alignments, including chimeric and paired-singletons
+ %12s (%.1f%%) UMI-unique single-end retained
+ %12s (%.1f%%) UMI-duplicate single-end %s
+",
+	$totalSingleCount, 
+	$uniqueSingleCount, 
+	($uniqueSingleCount/$totalSingleCount) * 100, 
+	$dupSingleCount, 
+	($dupSingleCount/$totalSingleCount) * 100, 
+	$markdups ? 'marked' : 'discarded';
+}
+
+if ($totalPairedCount) {
+	printf " %12s paired-end alignments
+ %12s (%.1f%%) UMI-unique paired-end retained
+ %12s (%.1f%%) UMI-duplicate paired-end %s
 ", 
-	$totalCount, $uniqueCount, ($uniqueCount/$totalCount) * 100, $duplicateCount, 
-	($duplicateCount/$totalCount) * 100, $markdups ? 'marked' : 'discarded';
+	$totalPairedCount, 
+	$uniquePairedCount, 
+	($uniquePairedCount/$totalPairedCount) * 100, 
+	$dupPairedCount, 
+	($dupPairedCount/$totalPairedCount) * 100, 
+	$markdups ? 'marked' : 'discarded';
+}
+
 if ($untagCount) {
 	printf " %12s (%.1f%%) alignments without UMI tags retained\n", $untagCount, 
-		($untagCount/$totalCount) * 100;
+		($untagCount/($totalSingleCount + $totalPairedCount)) * 100;
 }
 
 
@@ -251,78 +285,28 @@ if ($untagCount) {
 
 
 
-# process on chromosomes
-sub deduplicate_singlethread {
-	
-	# open bam new bam file
-	$outbam = Bio::ToolBox::db_helper::write_new_bam_file($outfile) or 
-		die "unable to open output bam file $outfile! $!";
-		# using an unexported subroutine imported as necessary depending on bam availability
-	# we can't write updated text to the header - otherwise it crashes
-	# $header->text($htext);
-	$outbam->header_write($header);
-	
-	# walk through the file
-	for my $tid (0 .. $sam->n_targets - 1) {
-		my $seq_length = $sam->target_len($tid);
-	
-		# prepare callback data structure
-		# anonymous hash of 
-		my $data = {
-			position        => -1,
-			totalCount      => 0,
-			uniqueCount     => 0,
-			duplicateCount  => 0,
-			untagged        => 0,
-			outbam          => $outbam,
-			reads           => [],
-			keepers         => {},
-			dupkeepers      => {}
-		};
-	
-		# walk through the reads on the chromosome
-		low_level_bam_fetch($sam, $tid, 0, $seq_length, $callback, $data);
-	
-		# check to make sure we don't leave something behind
-		if ($data->{reads}->[0]) {
-			if ($paired) {
-				write_pe_reads($data);
-			}
-			else {
-				write_se_reads($data);
-			}
-		}
-		
-		# add up the local counts to global counts
-		$totalCount += $data->{totalCount};
-		$uniqueCount  += $data->{uniqueCount};
-		$duplicateCount   += $data->{duplicateCount};
-		$untagCount += $data->{untagged};
-	}
-	
-	# finished
-	return 1;
-}
-
-
 sub deduplicate_multithread {
 	
 	# set up manager
 	my $pm = Parallel::ForkManager->new($cpu);
 	$pm->run_on_finish( sub {
 		my ($pid, $exit_code, $ident, $exit_signal, $core_dump, $data) = @_;
+		
 		# add child counts to global values
-		$totalCount += $data->{totalCount};
-		$uniqueCount  += $data->{uniqueCount};
-		$duplicateCount   += $data->{duplicateCount};
-		$untagCount += $data->{untagged};
+		$totalSingleCount  += $data->{totalSingleCount};
+		$uniqueSingleCount += $data->{uniqueSingleCount};
+		$dupSingleCount    += $data->{dupSingleCount};
+		$totalPairedCount  += $data->{totalPairedCount};
+		$uniquePairedCount += $data->{uniquePairedCount};
+		$dupPairedCount    += $data->{dupPairedCount};
+		$untagCount        += $data->{untagCount};
 	});
 	
 	# prepare targets and names
 	my @targets = (0 .. $sam->n_targets - 1);
 	my $tempfile = $outfile;
 	$tempfile =~ s/\.bam$//i;
-	my @targetfiles = map {$tempfile . ".temp.$_.bam"} @targets;
+	my @targetfiles = map {$tempfile . ".$$.$_.bam"} @targets;
 	
 	# walk through the file in parallel, one fork per chromosome
 	for my $tid (@targets) {
@@ -346,44 +330,47 @@ sub deduplicate_multithread {
 		
 		# prepare callback data structure
 		my $data = {
-			position        => -1,
-			totalCount      => 0,
-			uniqueCount     => 0,
-			duplicateCount  => 0,
-			untagged        => 0,
-			outbam          => $tempbam,
-			reads           => [],
-			keepers         => {},
-			dupkeepers      => {}
+			position            => -1,
+			totalSingleCount    => 0,
+			uniqueSingleCount   => 0,
+			dupSingleCount      => 0,
+			totalPairedCount    => 0,
+			uniquePairedCount   => 0,
+			dupPairedCount      => 0,
+			untagCount          => 0,
+			outbam              => $tempbam,
+			single_reads        => [],
+			paired_reads        => [],
+			keepers             => {},
+			duplicates          => {}
 		};
 	
 		# walk through the reads on the chromosome
 		my $seq_length = $sam->target_len($tid);
-		low_level_bam_fetch($sam, $tid, 0, $seq_length, $callback, $data);
+		low_level_bam_fetch($sam, $tid, 0, $seq_length, \&callback, $data);
 	
 		# check to make sure we don't leave something behind
-		if ($data->{reads}->[0]) {
-			if ($paired) {
-				write_pe_reads($data);
-			}
-			else {
-				write_se_reads($data);
-			}
+		if (defined $data->{single_reads}->[0] or defined $data->{paired_reads}->[0]) {
+			write_reads($data);
 		}
 		
 		# finish and return to parent
-		delete $data->{outbam};
-		delete $data->{keepers};
-		delete $data->{reads};
 		delete $data->{position};
+		delete $data->{outbam};
+		delete $data->{single_reads};
+		delete $data->{paired_reads};
+		delete $data->{keepers};
+		delete $data->{duplicates};
 		undef $tempbam;
 		$pm->finish(0, $data); 
 	}
 	$pm->wait_all_children;
 
+	
+	
 	# attempt to use external samtools to merge the bam files
 	# this should be faster than going through Perl and bam adapters
-	if ($sam_app and not $no_sam) {
+	if ($sam_app) {
 		# write a temporary sam header with updated text
 		my $samfile = $outfile;
 		$samfile =~ s/\.bam$/temp.sam/;
@@ -449,53 +436,70 @@ sub deduplicate_multithread {
 
 
 
-### alignment callback
-sub se_callback {
+### universal alignment callback
+sub callback {
 	my ($a, $data) = @_;
-	my $flag = $a->flag;
-	return if ($flag & 0x100 and not $keep_secondary); # secondary alignment
-	return if $flag & 0x800; # supplementary hit
-	# we ignore duplicate marks, assume it's not marked anyway....
-	$data->{totalCount} += 1;
 	
-	# check position 
-	my $pos = $a->pos;
-	if ($pos == $data->{position}) {
-		push @{ $data->{reads} }, $a;
+	# do we really need to check for QC fail FLAG 0x200 ????
+	
+	# First check position
+	if ($a->pos > $data->{position}) {
+		# current position is beyond last one
+		# must dump reads to disk
+		if (defined $data->{single_reads}->[0] or defined $data->{paired_reads}->[0]) {
+			write_reads($data);
+			# reset
+			$data->{position} = $a->pos;
+			$data->{single_reads} = [];
+			$data->{paired_reads} = [];
+		}
+	}
+	
+	# Process alignment
+	if ($a->paired) {
+		# paired alignment
+		
+		# get supplementary status
+		my $sup = $a->flag & 0x800 ? 1 : 0;
+		
+		# check alignment and process accordingly
+		if ($a->proper_pair and not $sup) {
+			# proper pair and not supplementary? great!
+			push @{ $data->{paired_reads} }, $a;
+			$data->{totalPairedCount}++;
+		}
+		elsif ($a->munmapped or $a->tid != $a->mtid or $sup or $a->unmapped) {
+			# singletons or cross-chromosome alignments 
+			# also don't trust that supplementary reads are "properly paired"
+			# we really shouldn't have unmapped reads here
+			# treat all of these as single-end reads
+			push @{ $data->{single_reads} }, $a;
+			$data->{totalSingleCount}++;
+		}
+		else {
+			# other paired reads
+			# typically same chromosome but miles apart or inverse orientation
+			# we can still take them as pairs
+			push @{ $data->{paired_reads} }, $a;
+			$data->{totalPairedCount}++;
+		}
 	}
 	else {
-		write_se_reads($data);
-		$data->{position} = $pos;
-		push @{ $data->{reads} }, $a;
+		# single-end alignment
+		push @{ $data->{single_reads} }, $a;
+		$data->{totalSingleCount}++;
 	}
 }
 
-### paired-end alignment callback for writing
-sub pe_callback {
-	my ($a, $data) = @_;
+
+sub write_reads {
+	my $data = shift;
 	
-	## check the alignment
-	return unless $a->proper_pair; # consider only proper pair alignments
-	return unless $a->tid == $a->mtid; # we can't handle cross-chromosome alignments
-	my $flag = $a->flag;
-	return if ($flag & 0x100 and not $keep_secondary); # secondary alignment
-	return if ($flag & 0x800); # supplementary hit
-	# we ignore duplicate marks, assume it's not marked anyway....
+	# arbitrarily write single end reads first
+	write_se_reads($data) if defined $data->{single_reads}->[0];
 	
-	# check position 
-	my $pos = $a->pos;
-	if ($pos == $data->{position}) {
-		push @{ $data->{reads} }, $a;
-	}
-	else {
-		# write out the reads
-		write_pe_reads($data) if defined $data->{reads}->[0];
-		
-		# reset
-		$data->{reads} = [];
-		$data->{position} = $pos;
-		push @{ $data->{reads} }, $a;
-	}
+	# then paired
+	write_pe_reads($data) if defined $data->{paired_reads}->[0];
 }
 
 
@@ -506,17 +510,18 @@ sub write_se_reads {
 	# put the reads into a hash based on tag identifer
 	my %tag2reads;
 	my @untagged;
-	foreach my $a (@{ $data->{reads} }) {
-		my $tag;
-		if ($a->qname =~ /:([AGTCN]+)$/) {
-			$tag = $1;
+	while (my $a = shift @{ $data->{single_reads} }) {
+		
+		# first check for any existing if supplemental or secondary
+		# otherwise collect UMI
+		my $tag = &$get_umi($a);
+		if (defined $tag) {
+			$tag2reads{$tag} ||= [];
+			push @{ $tag2reads{$tag} }, $a;
 		}
 		else {
 			push @untagged, $a;
-			next;
 		}
-		$tag2reads{$tag} ||= [];
-		push @{ $tag2reads{$tag} }, $a;
 	}
 	
 	# write out the unique reads
@@ -524,7 +529,7 @@ sub write_se_reads {
 		if (scalar @{ $tag2reads{$tag} } == 1) {
 			# good, only 1 read, we can write it
 			&$write_alignment($data->{outbam}, $tag2reads{$tag}->[0] );
-			$data->{uniqueCount}++; # accepted read 
+			$data->{uniqueSingleCount}++; # accepted read 
 		}
 		else {
 			# damn, more than 1 read, we gotta sort
@@ -534,9 +539,15 @@ sub write_se_reads {
 				sort { ($a->[1] <=> $b->[1]) or ($a->[2] <=> $b->[2]) } 
 				map { [$_, $_->qual, sum($_->qscore)] } 
 				@{ $tag2reads{$tag} };
+			
+			# write the best one
 			&$write_alignment($data->{outbam}, shift @sorted );
-			$data->{uniqueCount}++; # accepted read 
-			$data->{duplicateCount} += scalar(@sorted); # bad reads
+			
+			# update counters
+			$data->{uniqueSingleCount}++; # accepted read 
+			$data->{dupSingleCount} += scalar(@sorted); # bad reads
+			
+			# write remaining as necessary
 			if ($markdups) {
 				foreach my $a (@sorted) {
 					mark_alignment($a);
@@ -548,15 +559,13 @@ sub write_se_reads {
 	
 	# write untagged reads
 	if (@untagged) {
-		$data->{untagged} += scalar(@untagged);
+		$data->{untagCount} += scalar(@untagged);
 		foreach my $a (@untagged) {
 			&$write_alignment($data->{outbam}, $a);
 		}
 	}
-	
-	# reset
-	$data->{reads} = [];
 }
+
 
 ### Identify and write out paired-end alignments 
 sub write_pe_reads {
@@ -565,7 +574,7 @@ sub write_pe_reads {
 	# split up based on reported insertion size and strand
 	my %f_sizes;
 	my %r_sizes;
-	while (my $a = shift @{$data->{reads}}) {
+	while (my $a = shift @{$data->{paired_reads}}) {
 		my $s = $a->isize; 
 		if ($a->reversed) {
 			$r_sizes{$s} ||= [];
@@ -579,19 +588,12 @@ sub write_pe_reads {
 	
 	# write out forward alignments
 	foreach my $s (sort {$a <=> $b} keys %f_sizes) {
-		my ($uniq, $dup, $untag) = write_pe_reads_on_strand($data, $f_sizes{$s});
-		# record up the counts
-		$data->{uniqueCount} += $uniq;
-		$data->{duplicateCount} += $dup;
-		$data->{untagged} += $untag;
-		$data->{totalCount} += ($uniq + $dup + $untag);
+		write_pe_reads_on_strand($data, $f_sizes{$s});
 	}
 	
 	# write out reverse alignments
 	foreach my $s (sort {$a <=> $b} keys %r_sizes) {
-		my ($uniq, $dup, $untag) = write_pe_reads_on_strand($data, $r_sizes{$s});
-		# discard these counts - we only count forward strand
-		# weird situations where reverse came first still have a second chance at counts
+		write_pe_reads_on_strand($data, $r_sizes{$s});
 	}
 }
 
@@ -599,17 +601,10 @@ sub write_pe_reads_on_strand {
 	my ($data, $reads) = @_; 
 		# data reference and array reference of alignment reads
 	
-	# internal counts for alignments, only counting forward reads
-	my $uniq_c   = 0;
-	my $dup_c    = 0;
-	my $untag_c  = 0;
-	
 	# must sort the bams by the barcode
 	my %bc2a; # barcode-to-alignment hash
 	my @untagged;
-	my $number = scalar @$reads - 1;
-	for my $i (0 .. $number) {
-		my $a = $reads->[$i];
+	foreach my $a (@$reads) {
 		my $name = $a->qname;
 			# we will count those weird situations here where a reverse read came first
 			# and was processed first, leaving a forward read name in the keeper hash
@@ -617,20 +612,28 @@ sub write_pe_reads_on_strand {
 		if (exists $data->{keepers}{$name}) {
 			&$write_alignment($data->{outbam}, $a);
 			delete $data->{keepers}{$name};
-			$uniq_c++ if not $a->reversed; 
+			$data->{uniquePairedCount}++; 
+# 			print STDERR "=> write second unique pair $name\n";
 		}
-		elsif (exists $data->{dupkeepers}{$name}) {
-			mark_alignment($a);
-			&$write_alignment($data->{outbam}, $a);
-			delete $data->{dupkeepers}{$name};
-			$dup_c++ if not $a->reversed; 
-		}
-		elsif ($name =~ /:([AGTCN]+)$/) {
-			$bc2a{$1} ||= [];
-			push @{ $bc2a{$1} }, $a;
+		elsif (exists $data->{duplicates}{$name}) {
+			if ($markdups) {
+				mark_alignment($a);
+				&$write_alignment($data->{outbam}, $a);
+			}
+			delete $data->{duplicates}{$name};
+			$data->{dupPairedCount}++; 
+# 			print STDERR "=> found second duplicate pair $name\n";
 		}
 		else {
-			push @untagged, $a;
+			my $tag = &$get_umi($a);
+# 			print STDERR "> collected tag $tag for $name\n";
+			if (defined $tag) {
+				$bc2a{$tag} ||= [];
+				push @{ $bc2a{$tag} }, $a;
+			}
+			else {
+				push @untagged, $a;
+			}
 		}
 	}
 	
@@ -641,7 +644,8 @@ sub write_pe_reads_on_strand {
 			my $a = $bc2a{$bc}->[0];
 			$data->{keepers}{ $a->qname } += 1;
 			&$write_alignment($data->{outbam}, $a);
-			$uniq_c++ if not $a->reversed;
+			$data->{uniquePairedCount}++;
+# 			printf STDERR "=> write first unique only pair %s\n", $a->qname;
 		}
 		else {
 			# more than one alignment, must rank them by sum of base qualities
@@ -657,19 +661,26 @@ sub write_pe_reads_on_strand {
 			my $best = shift @sorted;
 			$data->{keepers}{ $best->qname } += 1;
 			&$write_alignment($data->{outbam}, $best);
+# 			printf STDERR "=> write first unique best pair %s\n", $best->qname;
 			
 			# increment counters
-			$uniq_c++ if not $best->reversed;
-			foreach (@sorted) {
-				$dup_c++ if not $_->reversed;
-			}
+			$data->{uniquePairedCount}++;
+			$data->{dupPairedCount} += scalar(@sorted);
 			
-			# write marked remaining duplicates
+			# record remaining duplicate names
 			if ($markdups) {
+				# write these as marked
 				foreach my $a (@sorted) {
-					$data->{dupkeepers}{$a->qname} += 1;
+					$data->{duplicates}{$a->qname} += 1;
 					mark_alignment($a);
 					&$write_alignment($data->{outbam}, $a);
+# 					printf STDERR "=> marked duplicate first pair %s\n", $a->qname;
+				}
+			}
+			else {
+				foreach my $a (@sorted) {
+					$data->{duplicates}{$a->qname} += 1;
+# 					printf STDERR "=> discard duplicate first pair %s\n", $a->qname;
 				}
 			}
 		}
@@ -677,17 +688,33 @@ sub write_pe_reads_on_strand {
 	
 	# write untagged reads
 	if (@untagged) {
+		$data->{untagCount} += scalar(@untagged);
 		foreach my $a (@untagged) {
 			$data->{keepers}{$a->qname} += 1; # remember to write pair
 			&$write_alignment($data->{outbam}, $a);
-			$untag_c++ if not $a->reversed; # only forward reads counted
 		}
 	}
-	
-	# return the internal counts
-	return ($uniq_c, $dup_c, $untag_c);
 }
 
+sub get_umi_from_name {
+	# get UMI from read name
+	if ($_[0]->qname =~ /:([AGCTN]{4,25})([\+\-][AGCTN]{4,25})?/i) {
+		if ($2) {
+			return $1 . $2;
+		}
+		else {
+			return $1;
+		}
+	}
+	else {
+		return undef;
+	}
+}
+
+sub get_umi_from_tag {
+	# get UMI from alignment tag
+	return $_[0]->aux_get($umi_location) || undef;
+}
 
 sub write_sam_alignment {
 	# wrapper for writing Bio::DB::Sam alignments
@@ -700,7 +727,7 @@ sub write_hts_alignment {
 }
 
 sub mark_alignment {
-	# mark alignments as a duplicate
+	# set alignment flag as a duplicate
 	my $f = $_[0]->flag;
 	unless ($f & 0x400) {
 		$f += 0x400;
