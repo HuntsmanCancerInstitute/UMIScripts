@@ -65,6 +65,7 @@ my $sam_app = sprintf("%s", which 'samtools');
 my $tilepos;
 my $xpos;
 my $ypos;
+my $start_time = time;
 
 my $description = <<END;
 
@@ -347,7 +348,7 @@ if ($untagCount) {
 		($untagCount/($totalSingleCount + $totalPairedCount)) * 100;
 }
 
-
+printf "\n Wrote $outfile in %.1f minutes \n", (time - $start_time) / 60;
 #### End
 
 
