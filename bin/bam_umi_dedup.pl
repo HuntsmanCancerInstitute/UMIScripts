@@ -760,7 +760,13 @@ sub get_umi_from_tag {
 
 sub collapse_umi_hash {
 	my ($tag2a, $Calculator) = @_;
-	my @list = keys %$tag2a;
+	# create first list from all the available UMI sequences
+	# we always sort the list so that we can merge similar tags in a systematic 
+	# fashion rather than randomly, shouldn't matter for single mismatches, but for 
+	# two (or more!?) mismatches, you can imagine hierarchical trees of relatedness
+	# but that's way too computationally intense for doing here, hence sorting is better 
+	# than nothing
+	my @list = sort {$a cmp $b} keys %$tag2a;
 	while (scalar(@list) > 1) {
 		# compare first tag with the remainder
 		my $first = shift @list;
@@ -775,8 +781,9 @@ sub collapse_umi_hash {
 				delete $tag2a->{$t};
 			}
 			# make new list for next cycle - but skip the current tag
+			# otherwise it would needlessly get repeated
 			@list = ();
-			foreach (keys %tag2a) {
+			foreach (sort {$a cmp $b} keys %$tag2a) {
 				push @list, $_ if $_ ne $first;
 			}
 		}
