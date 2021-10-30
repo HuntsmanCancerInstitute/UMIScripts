@@ -63,47 +63,47 @@ my $sam_app = sprintf("%s", which 'samtools');
 my $description = <<END;
 
 A script to remove duplicates based on a Unique Molecular Index (UMI) code.
-Alignments that match the same coordinate are checked for the random UMI code 
-in the read name; Reads with the same UMI are sorted and selected for one 
-to be retained. 
+Alignments that match the same coordinate are checked for the random UMI
+code in the read name; Reads with the same UMI are sorted and selected for
+one to be retained.
 
 UMI sequences may be embedded in alignments in one of two locations:
 
-  1 Added as an alignment attribute tag, typically the RX tag per 
-    current SAM specifications. This is the standard method, but 
-    requires compatible aligners. UMI sequence qualities (QX tag) 
-    are ignored. 
+  1 Added as an alignment attribute tag, typically the RX tag per current
+  SAM specifications. This is the standard method, but requires compatible
+  aligners. UMI sequence qualities (QX tag) are ignored.
 
-  2 Appended to the alignment read name as ":NNNN", where NNNN is a 
-    sequence of indeterminate length comprised of [A,T,G,C]. This 
-    is a non-standard method but generally compatible with all aligners.
-    Currently the default method for legacy reasons.
+  2 Appended to the alignment read name as ":NNNN", where NNNN is a
+  sequence of indeterminate length comprised of [A,T,G,C]. This is a
+  non-standard method but generally compatible with all aligners. Currently
+  the default method for legacy reasons.
 
-At each chromosomal position, one representative alignment is selected amongst
-all represented UMI sequences and the remainder are discarded (default) or
-marked as duplicate (bit flag 0x400) and retained. UMI sequence tags can
-tolerate mismatches up to the indicated number; insertions or deletions are not
-tolerated. In general, longer UMI sequences should tolerate more mismatches.
-Increased tolerance results in decreased UMI-unique alignments. Alignments
-without a detectable UMI flag are simply written out.
+At each chromosomal position, one representative alignment is selected
+amongst all represented UMI sequences and the remainder are discarded
+(default) or marked as duplicate (bit flag 0x400) and retained. UMI
+sequence tags can tolerate mismatches up to the indicated number;
+insertions or deletions are not tolerated. In general, longer UMI sequences
+should tolerate more mismatches, but at the risk of missing optimal
+matches. Increased tolerance results in decreased UMI-unique alignments.
+Alignments without a detectable UMI flag are simply written out.
 
-For single-end alignments, selection criteria amongst UMI-duplicates include
-mapping quality and the sum of read base qualities. For paired-end alignments,
-selection criteria include the mapping qualities of the forward and possibly
-reverse mate alignments (using tag 'MQ' if present) and the base qualities of
-the forward and possibly reverse mate alignments (using the samtools fixmate tag
-'ms'). 
+Selection criteria amongst UMI-duplicates include the mapping qualities of
+the alignment (and possibly mate pair using tag 'MQ' if present) or the sum
+of base qualities of the read (and possibly mate pair using the samtools
+fixmate tag 'ms').
 
-Bam files must be sorted by coordinate. Bam files may be indexed as necessary.
-Unmapped (flag 0x4) alignments are silently discarded. Read groups (tag RG) are
-ignored; de-duplication should be done with only one read group per Bam file.
+Bam files must be sorted by coordinate. Bam files may be indexed as
+necessary. Unmapped (flag 0x4) alignments are silently discarded. Read
+groups (tag RG) are ignored; de-duplication should be done with only one
+read group per Bam file.
 
-DISCLAIMER: Alignments are de-duplicated solely on alignment coordinates and the
-UMI sequences of the alignments at the current position, as well as properly
-paired mate pairs. No guarantees are made for maintaining the same molecule
-between secondary, supplementary (chimeric), and mate pair alignments on
-separate chromosomes. A unique Molecule Identifier (tag MI) is not calculated.
-These results may be sufficient for most applications, but not all.
+DISCLAIMER: Alignments are de-duplicated solely on alignment coordinates
+and the UMI sequences of the alignments at the current position, as well as
+properly paired mate pairs. No guarantees are made for maintaining the same
+molecule between secondary, supplementary (chimeric), and mate pair
+alignments on separate chromosomes. A unique Molecule Identifier (tag MI)
+is not calculated. These results may be sufficient for most applications,
+but not all.
 
 END
 
