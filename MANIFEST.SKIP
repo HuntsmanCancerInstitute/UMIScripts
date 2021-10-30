@@ -75,3 +75,9 @@
 
 # Avoid archives of this distribution
 \bUMIScripts-[\d\.\_]+
+
+# Avoid deprecated scripts
+\bdeprecated$
+
+
+
