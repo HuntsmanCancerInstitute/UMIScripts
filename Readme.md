@@ -30,17 +30,19 @@ either append it to the read name or write it as a third file. This is usually d
 to trimming adapters. GZip compressed files are natively handled. Processed reads in 
 some cases can be piped out to downstream applications (adapter trimming or alignment).
 
-- `SingleEndFastqBarcodeTagger.pl`
-
-    A simple script for incorporating a second Fastq read of UMIs into the first 
-    Fastq file, appending the UMI to the read name.
-
 - `embedded_UMI_extractor.pl`
 
     A simple script for extracting the UMI barcode from the beginning of the read. 
     A fixed sequence may or may not be present between the UMI and the sequenced 
     insert. Both single-end and paired-end (with or without a second UMI in the 
     second read) fastq files are supported. The UMI is appended to the read name.
+
+- `merge_umi_fastq.pl`
+
+    A script for merging a third fastq file of UMI sequences with one (single-end) 
+    or two (paired-end) fastq reads. The UMI may be appended to the read name 
+    (non-standard), added as SAM tags to the Fastq read header, or written out as 
+    an unaligned Sam or Bam file, depending on need and available support by the aligner.
 
 - `smallRNA_pe_umi_extractor.pl`
 
@@ -60,6 +62,35 @@ some cases can be piped out to downstream applications (adapter trimming or alig
     sequence as the UMI. 
     
     For a paired-end implementation of this, see `smallRNA_pe_umi_extractor.pl`.
+
+### Bam
+
+These post-alignment scripts are intended to work on Bam files for deduplication based 
+on coordinates and UMI sequence. They work on files only (no streaming). 
+
+- `bam_umi_dedup.pl`
+
+    A generic, multi-threaded, UMI-aware Bam de-duplication application. Alignments 
+    may be marked or removed based on coordinate, strand, and UMI sequence. UMI 
+    duplicates are selected based on highest quality scores (mapping and base quality). 
+    All single-end, proper paired-end, supplementary, and secondary alignments are 
+    processed, with caveats. 
+
+### Deprecated
+
+These are deprecated scripts, kept here for posterity, but superseded by other 
+scripts. Generally don't use.
+
+- `SingleEndFastqBarcodeTagger.pl`
+
+    A simple script for incorporating a second Fastq read of UMIs into the first 
+    Fastq file, appending the UMI to the read name.
+
+- `qiaseq_bam_deduplication.pl`
+
+    A paired-end, UMI-aware Bam de-duplication application designed to work with the 
+    qiaseq fastq scripts above. UMI duplicates are selected for the highest quality 
+    sequence. Superseded by the generic `bam_umi_dedup.pl`.
 
 - `qiaseq_barcode_extractor.pl`
 
@@ -81,24 +112,7 @@ some cases can be piped out to downstream applications (adapter trimming or alig
     and analogous to `embedded_UMI_extractor.pl`. Reads may then be aligned as normal 
     and de-duplicated using the below scripts.
 
-### Bam
 
-These post-alignment scripts are intended to work on Bam files for deduplication based 
-on coordinates and UMI sequence. They work on files only (no streaming). 
-
-- `bam_umi_dedup.pl`
-
-    A generic, multi-threaded, UMI-aware Bam de-duplication application. Alignments 
-    may be marked or removed based on coordinate, strand, and UMI sequence. UMI 
-    duplicates are selected based on highest quality scores (mapping and base quality). 
-    Both single-end and paired-end alignments are supported. Unmapped, paired singletons, 
-    supplementary, and secondary (by default) alignments are skipped and discarded.
-
-- `qiaseq_bam_deduplication.pl`
-
-    A paired-end, UMI-aware Bam de-duplication application designed to work with the 
-    qiaseq fastq scripts above. UMI duplicates are selected for the highest quality 
-    sequence. Superseded by the generic `bam_umi_dedup.pl`.
 
 ## Installation
 
