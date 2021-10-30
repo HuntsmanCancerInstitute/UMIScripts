@@ -17,6 +17,10 @@ use File::Which;
 use IO::File;
 use List::Util qw(sum max);
 use Parallel::ForkManager;
+use Text::Levenshtein::Flexible;
+	# this Levenshtein module is preferred over others available specifically 
+	# because we can weight insertions, deletions, and substitutions and
+	# we only want substitutions to be considered for UMI codes
 use Bio::ToolBox::db_helper 1.50 qw(
 	open_db_connection 
 	low_level_bam_fetch
@@ -40,12 +44,15 @@ my $VERSION = 2.0;
 # version 1.7 - improve alignment counting methodologies
 # version 1.8 - improve samtools cat command
 # version 1.9 - improve help and option checking
+# version 2.0 - deduplicate ALL alignments, support for SAM tags, tolerate mismatches
 
 #### Inputs
 my $infile;
 my $outfile;
 my $umi_location = 'name';
 my $markdups;
+my $mismatch = 1;
+my $indel_score = 10;
 my $paired;
 my $keep_secondary = 0;
 my $cpu = 4;
@@ -72,16 +79,20 @@ UMI sequences may be embedded in alignments in one of two locations:
     is a non-standard method but generally compatible with all aligners.
     Currently the default method for legacy reasons.
 
-After sorting alignments at a given position by UMI sequence, one representative 
-alignment is selected and the remainder discarded (default) or marked as 
-duplicate (bit flag 0x400) and retained. Alignments without a UMI flag are 
-simply written out.
+At each chromosomal position, one representative alignment is selected amongst
+all represented UMI sequences and the remainder are discarded (default) or
+marked as duplicate (bit flag 0x400) and retained. UMI sequence tags can
+tolerate mismatches up to the indicated number; insertions or deletions are not
+tolerated. In general, longer UMI sequences should tolerate more mismatches.
+Increased tolerance results in decreased UMI-unique alignments. Alignments
+without a detectable UMI flag are simply written out.
 
-For single-end alignments, selection criteria include mapping quality and the 
-sum of read base qualities. For paired-end alignments, selection criteria include 
-the mapping qualities of the forward and possibly reverse mate alignments (using 
-tag 'MQ' if present) and the base qualities of the forward and possibly reverse 
-mate alignments (using the samtools fixmate tag 'ms'). 
+For single-end alignments, selection criteria amongst UMI-duplicates include
+mapping quality and the sum of read base qualities. For paired-end alignments,
+selection criteria include the mapping qualities of the forward and possibly
+reverse mate alignments (using tag 'MQ' if present) and the base qualities of
+the forward and possibly reverse mate alignments (using the samtools fixmate tag
+'ms'). 
 
 Bam files must be sorted by coordinate. Bam files may be indexed as necessary.
 Unmapped (flag 0x4) alignments are silently discarded. Read groups (tag RG) are
@@ -103,14 +114,15 @@ VERSION: $VERSION
 USAGE:  bam_umi_dedup.pl --in in.bam --out out.bam
 
 OPTIONS:
-    -i --in <file>      The input bam file, should be sorted and indexed
-    -o --out <file>     The output bam file
-    -t --tag <string>   The location of the UMI sequence. See description.
-                          Typically 'RX'. Default 'name'.
-    -m --mark           Mark duplicates instead of discarding
-    -c --cpu <int>      Specify the number of threads to use ($cpu) 
-    --samtools <path>   Path to samtools ($sam_app)
-    -h --help           Display full description and help
+    -i --in <file>        The input bam file, should be sorted and indexed
+    -o --out <file>       The output bam file
+    -u --umi <string>     The location of the UMI sequence. See description.
+                            Typically 'RX'. Default 'name'.
+    -m --mark             Mark duplicates instead of discarding
+    -t --tolerance <int>  Mismatch tolerance ($mismatch)
+    -c --cpu <int>        Specify the number of threads to use ($cpu) 
+    --samtools <path>     Path to samtools ($sam_app)
+    -h --help             Display full description and help
 
 END
 
@@ -123,9 +135,11 @@ unless (@ARGV) {
 GetOptions( 
 	'i|in=s'        => \$infile, # the input bam file path
 	'o|out=s'       => \$outfile, # name of output file 
-	't|tag=s'       => \$umi_location, # the location where the UMI tag is stored
+	'u|umi=s'       => \$umi_location, # the location where the UMI tag is stored
 	'p|pe!'         => \$paired, # legacy flag for paired-end alignments
 	'm|mark!'       => \$markdups, # set duplicate flag instead of removing
+	't|tolerance=i' => \$mismatch, # number mismatches allowed
+	'indel=i'       => \$indel_score, # weight for indel scoring in calculating distance
 	's|secondary!'  => \$keep_secondary, # legacy flag to keep secondary alignments 
 	'c|cpu=i'       => \$cpu, # number of cpu cores to use
 	'samtools=s'    => \$sam_app, # path to samtools
@@ -197,11 +211,22 @@ else {
 
 # update headers
 my $htext = $header->text;
-$htext .= sprintf("\@PG\tID:bam_umi_dedup\tVN:%s\tCL:%s", $VERSION, $0);
-$htext .= " --in $infile --out $outfile --tag $umi_location";
-$htext .= " --mark" if $markdups;
-$htext .= " --samtools $sam_app" if $sam_app;
-$htext .= " --bam $BAM_ADAPTER\n";
+{
+	my $pp;
+	foreach my $line (split "\n", $htext) {
+		# assume the last observed program should become the previous program ID
+		if (substr($line,0,3) eq '@PG' and $line =~ /ID:([\w\.\-]+)/) {
+			$pp =$1;
+		}
+	}
+	$htext .= "\@PG\tID:bam_umi_dedup\t";
+	$htext .= "PP:$pp\t" if $pp;
+	$htext .= sprintf("VN:%s\tCL:%s", $VERSION, $0);
+	$htext .= " --in $infile --out $outfile --tag $umi_location";
+	$htext .= " --mark" if $markdups;
+	$htext .= " --samtools $sam_app" if $sam_app;
+	$htext .= " --bam $BAM_ADAPTER\n";
+}
 
 
 
@@ -282,7 +307,7 @@ if ($untagCount) {
 
 
 
-
+######## Subroutines ###########
 
 
 sub deduplicate_multithread {
@@ -313,6 +338,8 @@ sub deduplicate_multithread {
 		$pm->start and next;
 		
 		### in child
+		
+		# Clone Bam object
 		$sam->clone;
 		if ($BAM_ADAPTER eq 'sam') {
 			$header = $sam->bam->header;
@@ -321,12 +348,21 @@ sub deduplicate_multithread {
 			$header = $sam->hts_file->header_read;
 		}
 		
-		
 		# prepare a temporary bam file
 		my $tf = $targetfiles[$tid];
 		my $tempbam = Bio::ToolBox::db_helper::write_new_bam_file($tf) or 
 			die "unable to open output bam file $tf! $!";
 		$tempbam->header_write($header);
+		
+		# prepare distance calculator
+		my $Calculator;
+		if ($mismatch) {
+			# set maximum distance allowed to user-defined mismatch level
+			# set scoring weights of insertion 10, deletion 10, substitution 1
+			$Calculator = Text::Levenshtein::Flexible->new(
+				$mismatch, $indel_score, $indel_score, 1) or 
+				die "unable to initiate Text::Levenshtein::Flexible object! $!";
+		}
 		
 		# prepare callback data structure
 		my $data = {
@@ -342,7 +378,8 @@ sub deduplicate_multithread {
 			single_reads        => [],
 			paired_reads        => [],
 			keepers             => {},
-			duplicates          => {}
+			duplicates          => {},
+			calculator          => $Calculator
 		};
 	
 		# walk through the reads on the chromosome
@@ -361,7 +398,9 @@ sub deduplicate_multithread {
 		delete $data->{paired_reads};
 		delete $data->{keepers};
 		delete $data->{duplicates};
+		delete $data->{calculator};
 		undef $tempbam;
+		undef $Calculator;
 		$pm->finish(0, $data); 
 	}
 	$pm->wait_all_children;
@@ -524,7 +563,12 @@ sub write_se_reads {
 		}
 	}
 	
-	# write out the unique reads
+	# first collapse UMI tags based on mismatches
+	if ($mismatch and scalar(keys %tag2reads) > 1) {
+		collapse_umi_hash(\%tag2reads, $data->{calculator});
+	}
+	
+	# then write out one of each tag
 	foreach my $tag (keys %tag2reads) {
 		if (scalar @{ $tag2reads{$tag} } == 1) {
 			# good, only 1 read, we can write it
@@ -602,7 +646,7 @@ sub write_pe_reads_on_strand {
 		# data reference and array reference of alignment reads
 	
 	# must sort the bams by the barcode
-	my %bc2a; # barcode-to-alignment hash
+	my %tag2reads; # barcode-to-alignment hash
 	my @untagged;
 	foreach my $a (@$reads) {
 		my $name = $a->qname;
@@ -613,7 +657,6 @@ sub write_pe_reads_on_strand {
 			&$write_alignment($data->{outbam}, $a);
 			delete $data->{keepers}{$name};
 			$data->{uniquePairedCount}++; 
-# 			print STDERR "=> write second unique pair $name\n";
 		}
 		elsif (exists $data->{duplicates}{$name}) {
 			if ($markdups) {
@@ -622,14 +665,12 @@ sub write_pe_reads_on_strand {
 			}
 			delete $data->{duplicates}{$name};
 			$data->{dupPairedCount}++; 
-# 			print STDERR "=> found second duplicate pair $name\n";
 		}
 		else {
 			my $tag = &$get_umi($a);
-# 			print STDERR "> collected tag $tag for $name\n";
 			if (defined $tag) {
-				$bc2a{$tag} ||= [];
-				push @{ $bc2a{$tag} }, $a;
+				$tag2reads{$tag} ||= [];
+				push @{ $tag2reads{$tag} }, $a;
 			}
 			else {
 				push @untagged, $a;
@@ -637,15 +678,19 @@ sub write_pe_reads_on_strand {
 		}
 	}
 	
-	# now write one of each
-	foreach my $bc (keys %bc2a) {
-		if (scalar @{$bc2a{$bc}} == 1) {
+	# first collapse UMI tags based on mismatches
+	if ($mismatch and scalar(keys %tag2reads) > 1) {
+		collapse_umi_hash(\%tag2reads, $data->{calculator});
+	}
+	
+	# then write one of each tag
+	foreach my $tag (keys %tag2reads) {
+		if (scalar @{$tag2reads{$tag}} == 1) {
 			# only 1 alignment, excellent, write it
-			my $a = $bc2a{$bc}->[0];
+			my $a = $tag2reads{$tag}->[0];
 			$data->{keepers}{ $a->qname } += 1;
 			&$write_alignment($data->{outbam}, $a);
 			$data->{uniquePairedCount}++;
-# 			printf STDERR "=> write first unique only pair %s\n", $a->qname;
 		}
 		else {
 			# more than one alignment, must rank them by sum of base qualities
@@ -655,13 +700,12 @@ sub write_pe_reads_on_strand {
 						$_, 
 						sum($_->qual, $_->aux_get('MQ') || 0),
 						sum($_->qscore, $_->aux_get('ms') || 0) 
-				] } @{ $bc2a{$bc} };
+				] } @{ $tag2reads{$tag} };
 			
 			# write the first one
 			my $best = shift @sorted;
 			$data->{keepers}{ $best->qname } += 1;
 			&$write_alignment($data->{outbam}, $best);
-# 			printf STDERR "=> write first unique best pair %s\n", $best->qname;
 			
 			# increment counters
 			$data->{uniquePairedCount}++;
@@ -674,13 +718,11 @@ sub write_pe_reads_on_strand {
 					$data->{duplicates}{$a->qname} += 1;
 					mark_alignment($a);
 					&$write_alignment($data->{outbam}, $a);
-# 					printf STDERR "=> marked duplicate first pair %s\n", $a->qname;
 				}
 			}
 			else {
 				foreach my $a (@sorted) {
 					$data->{duplicates}{$a->qname} += 1;
-# 					printf STDERR "=> discard duplicate first pair %s\n", $a->qname;
 				}
 			}
 		}
@@ -714,6 +756,32 @@ sub get_umi_from_name {
 sub get_umi_from_tag {
 	# get UMI from alignment tag
 	return $_[0]->aux_get($umi_location) || undef;
+}
+
+sub collapse_umi_hash {
+	my ($tag2a, $Calculator) = @_;
+	my @list = keys %$tag2a;
+	while (scalar(@list) > 1) {
+		# compare first tag with the remainder
+		my $first = shift @list;
+		my @results = $Calculator->distance_lc_all($first, @list);
+		
+		# check results
+		if (@results) {
+			# combine alignments for matching tags, then delete the hash entry
+			foreach (@results) {
+				my $t = $_->[0]; # result is array of [word, #mismatches]
+				push @{ $tag2a->{$first} }, @{$tag2a->{$t}};
+				delete $tag2a->{$t};
+			}
+			# make new list for next cycle - but skip the current tag
+			@list = ();
+			foreach (keys %tag2a) {
+				push @list, $_ if $_ ne $first;
+			}
+		}
+	}
+	return 1;
 }
 
 sub write_sam_alignment {

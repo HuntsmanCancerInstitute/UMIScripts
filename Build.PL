@@ -20,10 +20,11 @@ my $build = Module::Build->new(
 		'Module::Build'           => 0,
 	},
 	requires          => {
-		'String::Approx'            => 0,
-		'Bio::ToolBox'              => 1.60,
-		'Parallel::ForkManager'     => 0,
-		'Bio::DB::HTS'              => 0,
+		'String::Approx'                => 0,
+		'Bio::ToolBox'                  => 1.60,
+		'Parallel::ForkManager'         => 0,
+		'Bio::DB::HTS'                  => 0,
+		'Text::Levenshtein::Flexible'   => 0,
 	},
 	recommends        => {
 	},
