@@ -76,13 +76,13 @@ one to be retained.
 UMI sequences may be embedded in alignments in one of two locations:
 
   1 Added as an alignment attribute tag, typically the RX tag per current
-  SAM specifications. This is the standard method, but requires compatible
-  aligners. UMI sequence qualities (QX tag) are ignored.
+    SAM specifications. This is the standard method, but requires 
+    compatible aligners. UMI sequence qualities (QX tag) are ignored.
 
   2 Appended to the alignment read name as ":NNNN", where NNNN is a
-  sequence of indeterminate length comprised of [A,T,G,C]. This is a
-  non-standard method but generally compatible with all aligners. Currently
-  the default method for legacy reasons.
+    sequence of indeterminate length comprised of [A,T,G,C]. This is a
+    non-standard method but generally compatible with all aligners. 
+    Currently the default method for legacy reasons.
 
 At each chromosomal position, one representative alignment is selected
 amongst all represented UMI sequences and the remainder are discarded
@@ -91,14 +91,18 @@ sequence tags can tolerate mismatches up to the indicated number;
 insertions or deletions are not tolerated. In general, longer UMI sequences
 should tolerate more mismatches, but at the risk of missing optimal
 matches. Increased tolerance results in decreased UMI-unique alignments.
-Alignments without a detectable UMI flag are simply written out. A maximum 
-threshold depth is imposed at extreme positions to avoid excessive runtimes; 
-excess alignments are discarded.
+Alignments without a detectable UMI flag are simply written out. 
 
 Selection criteria amongst UMI-duplicates include the mapping qualities of
 the alignment (and possibly mate pair using tag 'MQ' if present) or the sum
 of base qualities of the read (and possibly mate pair using the samtools
 fixmate tag 'ms').
+
+Optical duplicate checking may be optionally included by specifying the
+pixel distance threshold for marking as duplicates. Tile coordinates must
+be present in the alignment read name. Optical de-duplication occurs before
+UMI checking, so some false positives may be expected. Optical duplicates
+are not distinguished from UMI duplicates when marking.
 
 Bam files must be sorted by coordinate. Bam files may be indexed as
 necessary. Unmapped (flag 0x4) alignments are silently discarded. Read
@@ -126,7 +130,7 @@ OPTIONS:
     -o --out <file>       The output bam file
     -u --umi <string>     The location of the UMI sequence. See description.
                             Typically 'RX'. Default 'name'.
-    -m --mark             Mark duplicates instead of discarding
+    -m --mark             Mark duplicates (flag 0x400) instead of discarding
     -t --tolerance <int>  Mismatch tolerance ($mismatch)
     -d --distance <int>   Set optical duplicate distance threshold.
                             Use 100 for unpatterned flowcell (HiSeq) or 
@@ -262,7 +266,7 @@ my $htext = $header->text;
 	$htext .= " --mark" if $markdups;
 	$htext .= " --tolerance $mismatch --indel $indel_score";
 	$htext .= " --distance $opt_distance" if $opt_distance;
-	$htext .= " --coord $name_coordinates" if $name_coordinates;
+	$htext .= " --coord $name_coordinates" if $name_coordinates and $opt_distance;
 	$htext .= " --samtools $sam_app" if $sam_app;
 	$htext .= " --bam $BAM_ADAPTER\n";
 }
