@@ -16,6 +16,7 @@ use Getopt::Long;
 use File::Which;
 use IO::File;
 use List::Util qw(sum min max);
+use List::MoreUtils qw(firstidx);
 use Parallel::ForkManager;
 use Text::Levenshtein::Flexible;
 	# this Levenshtein module is preferred over others available specifically 
@@ -1135,12 +1136,11 @@ sub collapse_umi_hash {
 				my $t = $_->[0]; # result is array of [word, #mismatches]
 				push @{ $tag2a->{$first} }, @{$tag2a->{$t}};
 				delete $tag2a->{$t};
-			}
-			# make new list for next cycle - but skip the current tag
-			# otherwise it would needlessly get repeated
-			@list = ();
-			foreach (sort {$a cmp $b} keys %$tag2a) {
-				push @list, $_ if $_ ne $first;
+				# remove this from the list
+				my $i = firstidx {$_ eq $t} @list;
+				if (defined $i) {
+					splice @list, $i, 1;
+				}
 			}
 		}
 	}
