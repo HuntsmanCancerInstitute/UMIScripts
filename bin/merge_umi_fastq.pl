@@ -193,6 +193,9 @@ if ($outfile and $outfile =~ /\.[s|b]am(?:\.gz)?$/) {
 	# convenience
 	$sam_format = 1;
 }
+if ($sam_format and $outfile and $outfile !~ /\.bam$/) {
+	$outfile .= '.bam';
+}
 if ($sam_format and not $sam_app) {
 	if ($outfile and $outfile =~ m/\.bam$/) {
 		$outfile =~ s/\bam$/sam.gz/;
