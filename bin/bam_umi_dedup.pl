@@ -30,7 +30,7 @@ use Bio::ToolBox::db_helper 1.50 qw(
 # this can import either Bio::DB::Sam or Bio::DB::HTS depending on availability
 # this script is mostly bam adapter agnostic
 
-my $VERSION = 2.0;
+my $VERSION = 2.1;
 # version 1.0 - initial version
 # version 1.1 - added option to write the duplicates to second bam file
 # version 1.2 - add marking and parallel processing, make compatible with 
@@ -46,11 +46,12 @@ my $VERSION = 2.0;
 # version 1.8 - improve samtools cat command
 # version 1.9 - improve help and option checking
 # version 2.0 - deduplicate ALL alignments, support for SAM tags, tolerate mismatches
+# version 2.1 - change default to SAM tag instead of read name
 
 #### Inputs
 my $infile;
 my $outfile;
-my $umi_location = 'name';
+my $umi_location = 'RX';
 my $markdups;
 my $mismatch = 1;
 my $indel_score = 10;
@@ -83,7 +84,6 @@ UMI sequences may be embedded in alignments in one of two locations:
   2 Appended to the alignment read name as ":NNNN", where NNNN is a
     sequence of indeterminate length comprised of [A,T,G,C]. This is a
     non-standard method but generally compatible with all aligners. 
-    Currently the default method for legacy reasons.
 
 At each chromosomal position, one representative alignment is selected
 amongst all represented UMI sequences and the remainder are discarded
@@ -129,8 +129,8 @@ USAGE:  bam_umi_dedup.pl --in in.bam --out out.bam
 OPTIONS:
     -i --in <file>        The input bam file, should be sorted and indexed
     -o --out <file>       The output bam file
-    -u --umi <string>     The location of the UMI sequence. See description.
-                            Typically 'RX'. Default 'name'.
+    -u --umi <string>     SAM tag name for UMI sequence. Default 'RX'
+                            Specify 'name' when appended to read name.
     -m --mark             Mark duplicates (flag 0x400) instead of discarding
     -t --tolerance <int>  Mismatch tolerance ($mismatch)
     -d --distance <int>   Set optical duplicate distance threshold.
