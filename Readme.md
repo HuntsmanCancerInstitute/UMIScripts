@@ -18,10 +18,11 @@ As such, UMIs are tested for exact matches without regard to base qualities or m
 which is probably suitable in most cases where users are simply looking to remove PCR 
 artifacts. Users needing more advanced tools or reporting may need to look elsewhere.
 
+See the [Usage document](Usage.md) document for further details and suggestions.
+
 ## Applications
 
-Below is a description of the included programs. Execute each script without any options to 
-display the internal help page and list of available options.
+Below is a description of the included programs. 
 
 ### Fastq
 
@@ -113,22 +114,27 @@ scripts. Generally don't use.
     and de-duplicated using the below scripts.
 
 
+## Usage
+
+Execute each script without any options to display the internal help page and 
+list of available options.
+
+See the accompanying [Usage document](Usage.md) for suggested guidance on processing 
+Fastq files, aligning with popular aligners, and de-duplicating.
 
 ## Installation
 
-The package only includes scripts in the `bin` directory, which can be used as is. 
-The scripts for bam file processing require additional library requirements of 
-[Bio::ToolBox](https://metacpan.org/pod/Bio::ToolBox) and 
-[Bio::DB::HTS](https://metacpan.org/pod/Bio::DB::HTS). Installation instructions 
-can be found at the [Bio::ToolBox repository](https://github.com/tjparnell/biotoolbox).
-Adapter identification with mismatches requires 
-[String::Approx](https://metacpan.org/pod/String::Approx).
-A standard [Module::Build](https://metacpan.org/pod/Module::Build) script is also 
-provided for automated installation.
+A standard Perl [Module::Build](https://metacpan.org/pod/Module::Build) script is 
+provided for ease of installation.
 
     perl ./Build.PL
     ./Build
     ./Build install
+
+Installation of [Bio::DB::HTS](https://metacpan.org/pod/Bio::DB::HTS) requires the
+external  library `libhts` to be installed. Additional guidance can be found at the 
+[Bio::ToolBox repository](https://github.com/tjparnell/biotoolbox/blob/master/docs/AdvancedInstallation.md) 
+if necessary.
 
 # AUTHOR
 
