@@ -174,10 +174,10 @@ programs that can be used.
 ### Picard
 
 The Picard tool
-[UmiAwareMarkDuplicatesWithMateCigar](https://broadinstitute.github.io/picard/command
--line-overview.html#UmiAwareMarkDuplicatesWithMateCigar) is the most complete and
-thorough application, at the great expense of speed, i.e. it is painfully slow! It
-can only accommodate UMI sequences in a SAM attribute tag, RX by default.
+[UmiAwareMarkDuplicatesWithMateCigar](https://broadinstitute.github.io/picard/command-lineoverview.html#UmiAwareMarkDuplicatesWithMateCigar)
+is the most complete and thorough application, at the great expense of speed, i.e. it 
+is painfully slow! It can only accommodate UMI sequences in a SAM attribute tag, 
+`RX` by default.
 
     java -jar picard.jar UmiAwareMarkDuplicatesWithMateCigar \
     -I input.bam -O output.bam \
