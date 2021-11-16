@@ -54,7 +54,7 @@ my $outfile;
 my $umi_location = 'RX';
 my $markdups;
 my $mismatch = 1;
-my $indel_score = 10;
+my $indel_score = 1;
 my $opt_distance = 0;
 my $name_coordinates;
 my $cpu = 4;
@@ -127,12 +127,18 @@ VERSION: $VERSION
 USAGE:  bam_umi_dedup.pl --in in.bam --out out.bam
 
 OPTIONS:
+  Required:
     -i --in <file>        The input bam file, should be sorted and indexed
     -o --out <file>       The output bam file
+  
+  UMI options:
     -u --umi <string>     SAM tag name for UMI sequence. Default 'RX'
-                            Specify 'name' when appended to read name.
+                            Specify 'name' when UMI appended to read name.
     -m --mark             Mark duplicates (flag 0x400) instead of discarding
-    -t --tolerance <int>  Mismatch tolerance ($mismatch)
+    -t --tolerance <int>  UMI sequence mismatch tolerance ($mismatch)
+    --indel <int>         Set insertion/deletion penalty score ($indel_score)
+
+  Other options:
     -d --distance <int>   Set optical duplicate distance threshold.
                             Use 100 for unpatterned flowcell (HiSeq) or 
                             2500 for patterned flowcell (NovaSeq). Default 0.
@@ -1116,7 +1122,7 @@ sub collapse_umi_hash {
 		if (@results) {
 			# combine alignments for matching tags, then delete the hash entry
 			foreach (@results) {
-				my $t = $_->[0]; # result is array of [word, #mismatches]
+				my $t = $_->[0]; # result is array of [word, distance]
 				push @{ $tag2a->{$first} }, @{$tag2a->{$t}};
 				delete $tag2a->{$t};
 				# remove this from the list
