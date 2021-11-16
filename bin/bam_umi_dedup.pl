@@ -673,6 +673,7 @@ sub write_se_reads_on_strand {
 	else {
 		# blindly take everything
 		$nonopt_reads = $reads;
+		$optdup_reads = []; # empty array
 	}
 	
 	# put the reads into a hash based on tag identifer
@@ -822,6 +823,7 @@ sub write_pe_reads_on_strand {
 	else {
 		# blindly take everything
 		$nonopt_reads = $reads;
+		$optdup_reads = []; # empty array
 	}
 	
 	# then collect the UMI codes from remaining alignments
