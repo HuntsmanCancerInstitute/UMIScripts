@@ -30,7 +30,7 @@ use Bio::ToolBox::db_helper 1.50 qw(
 # this can import either Bio::DB::Sam or Bio::DB::HTS depending on availability
 # this script is mostly bam adapter agnostic
 
-my $VERSION = 2.1;
+my $VERSION = 2.2;
 # version 1.0 - initial version
 # version 1.1 - added option to write the duplicates to second bam file
 # version 1.2 - add marking and parallel processing, make compatible with 
@@ -47,6 +47,7 @@ my $VERSION = 2.1;
 # version 1.9 - improve help and option checking
 # version 2.0 - deduplicate ALL alignments, support for SAM tags, tolerate mismatches
 # version 2.1 - change default to SAM tag instead of read name
+# version 2.2 - bug fix, improve optical detection
 
 #### Inputs
 my $infile;
@@ -101,9 +102,8 @@ fixmate tag 'ms').
 
 Optical duplicate checking may be optionally included by specifying the
 pixel distance threshold for marking as duplicates. Tile coordinates must
-be present in the alignment read name. Optical de-duplication occurs before
-UMI checking, so some false positives may be expected. Optical duplicates
-are not distinguished from UMI duplicates when marking.
+be present in the alignment read name. Optical duplicates are not 
+distinguished from UMI duplicates when marking.
 
 Bam files must be sorted by coordinate. Bam files may be indexed as
 necessary. Unmapped (flag 0x4) alignments are silently discarded. Read
@@ -669,23 +669,10 @@ sub write_se_reads_on_strand {
 	my ($data, $reads) = @_; 
 		# data reference and array reference of alignment reads
 
-	# collect the non-optical duplicate reads
-	my ($nonopt_reads, $optdup_reads, $error);
-	if ($opt_distance) {
-		($nonopt_reads, $optdup_reads, $error) = identify_optical_duplicates($reads);
-		$data->{opticalSingleCount} += scalar @$optdup_reads;
-		$data->{coordErrorCount} += $error;
-	}
-	else {
-		# blindly take everything
-		$nonopt_reads = $reads;
-		$optdup_reads = []; # empty array
-	}
-	
 	# put the reads into a hash based on tag identifer
 	my %tag2reads;
 	my @untagged;
-	while (my $a = shift @{ $nonopt_reads }) {
+	while (my $a = shift @$reads) {
 	
 		# collect UMI
 		my $tag = &$get_umi($a);
@@ -712,12 +699,28 @@ sub write_se_reads_on_strand {
 		}
 		else {
 			# damn, more than 1 read, we gotta sort
+			
+			# first check for optical duplicates, if requested
+			my ($nonopt_reads, $optdup_reads, $error);
+			if ($opt_distance) {
+				($nonopt_reads, $optdup_reads, $error) = 
+					identify_optical_duplicates($tag2reads{$tag});
+				$data->{opticalSingleCount} += scalar @$optdup_reads;
+				$data->{coordErrorCount} += $error;
+			}
+			else {
+				# blindly take everything
+				$nonopt_reads = $tag2reads{$tag};
+				$optdup_reads = []; # empty array
+			}
+			
+			# then sort the reads to arguably take the best one
 			# sorting first on mapping quality, then sum of base qualities
 			my @sorted = 
 				map {$_->[0]} 
 				sort { ($a->[1] <=> $b->[1]) or ($a->[2] <=> $b->[2]) } 
 				map { [$_, $_->qual, sum($_->qscore)] } 
-				@{ $tag2reads{$tag} };
+				@$nonopt_reads;
 		
 			# write the best one
 			&$write_alignment($data->{outbam}, shift @sorted );
@@ -733,14 +736,14 @@ sub write_se_reads_on_strand {
 					&$write_alignment($data->{outbam}, $a);
 				}
 			}
-		}
-	}
-	
-	# write optical duplicate reads
-	if ($markdups and scalar @$optdup_reads) {
-		foreach my $a (@$optdup_reads) {
-			mark_alignment($a);
-			&$write_alignment($data->{outbam}, $a);
+			
+			# write remaining optical duplicate reads
+			if ($markdups and scalar @$optdup_reads) {
+				foreach my $a (@$optdup_reads) {
+					mark_alignment($a);
+					&$write_alignment($data->{outbam}, $a);
+				}
+			}
 		}
 	}
 	
@@ -788,17 +791,21 @@ sub write_pe_reads_on_strand {
 	my ($data, $reads) = @_; 
 		# data reference and array reference of alignment reads
 	
-	
+	# Go through all the reads
 	# first identify possible mates of previously marked duplicates
-	my @nondup_reads;
+	# then extract the UMI tag for sorting
+	my %tag2reads; # barcode-to-alignment hash
+	my @untagged;
 	while (my $a = shift @$reads) {
 		my $name = $a->qname;
 		if (exists $data->{keepers}{$name}) {
+			# the pair was a unique keeper
 			&$write_alignment($data->{outbam}, $a);
 			delete $data->{keepers}{$name};
 			$data->{uniquePairedCount}++; 
 		}
 		elsif (exists $data->{duplicates}{$name}) {
+			# pair was a duplicate
 			if ($markdups) {
 				mark_alignment($a);
 				&$write_alignment($data->{outbam}, $a);
@@ -807,6 +814,7 @@ sub write_pe_reads_on_strand {
 			$data->{dupPairedCount}++; 
 		}
 		elsif (exists $data->{opt_duplicates}{$name}) {
+			# pair was an optical duplicate
 			if ($markdups) {
 				mark_alignment($a);
 				&$write_alignment($data->{outbam}, $a);
@@ -815,39 +823,20 @@ sub write_pe_reads_on_strand {
 			$data->{opticalPairedCount}++; 
 		}
 		else {
-			push @nondup_reads, $a;
+			# pair hasn't been seen before
+			# collect the UMI code
+			my $tag = &$get_umi($a);
+			if (defined $tag) {
+				$tag2reads{$tag} ||= [];
+				push @{ $tag2reads{$tag} }, $a;
+			}
+			else {
+				push @untagged, $a;
+			}
 		}
 	}
 	
-	# collect the optical duplicate reads
-	my ($nonopt_reads, $optdup_reads, $error);
-	if ($opt_distance) {
-		($nonopt_reads, $optdup_reads, $error) = identify_optical_duplicates(\@nondup_reads);
-		$data->{optical} += scalar @$optdup_reads;
-		$data->{coordErrorCount} += $error;
-	}
-	else {
-		# blindly take everything
-		$nonopt_reads = $reads;
-		$optdup_reads = []; # empty array
-	}
-	
-	# then collect the UMI codes from remaining alignments
-	my %tag2reads; # barcode-to-alignment hash
-	my @untagged;
-	while (my $a = shift @{ $nonopt_reads }) {
-		# get UMI
-		my $tag = &$get_umi($a);
-		if (defined $tag) {
-			$tag2reads{$tag} ||= [];
-			push @{ $tag2reads{$tag} }, $a;
-		}
-		else {
-			push @untagged, $a;
-		}
-	}
-	
-	# first collapse UMI tags based on mismatches
+	# Collapse UMI tags based on mismatches
 	if ($mismatch and scalar(keys %tag2reads) > 1) {
 		collapse_umi_hash(\%tag2reads, $data->{calculator});
 	}
@@ -863,13 +852,30 @@ sub write_pe_reads_on_strand {
 		}
 		else {
 			# more than one alignment, must rank them by sum of base qualities
+	
+			# first check for optical duplicates, if requested
+			my ($nonopt_reads, $optdup_reads, $error);
+			if ($opt_distance) {
+				($nonopt_reads, $optdup_reads, $error) = 
+					identify_optical_duplicates( $tag2reads{$tag} );
+				$data->{opticalPairedCount} += scalar @$optdup_reads;
+				$data->{coordErrorCount} += $error;
+			}
+			else {
+				# blindly take everything
+				$nonopt_reads = $tag2reads{$tag};
+				$optdup_reads = []; # empty array
+			}
+			
+			# then sort the reads to arguably take the best one
+			# sorting first on mapping quality, then sum of base qualities
 			my @sorted = map {$_->[0]} 
 				sort { ($a->[1] <=> $b->[1]) or ($a->[2] <=> $b->[2]) } 
 				map { [ 
 						$_, 
 						sum($_->qual, $_->aux_get('MQ') || 0),
 						sum($_->qscore, $_->aux_get('ms') || 0) 
-				] } @{ $tag2reads{$tag} };
+				] } @$nonopt_reads;
 			
 			# write the first one
 			my $best = shift @sorted;
@@ -894,20 +900,20 @@ sub write_pe_reads_on_strand {
 					$data->{duplicates}{$a->qname} += 1;
 				}
 			}
-		}
-	}
-	
-	# write optical duplicate reads, and remember them so to write its pair
-	if ($markdups and scalar @$optdup_reads) {
-		foreach my $a (@$optdup_reads) {
-			$data->{opt_duplicates}{$a->qname} += 1;
-			mark_alignment($a);
-			&$write_alignment($data->{outbam}, $a);
-		}
-	}
-	elsif (scalar @$optdup_reads) {
-		foreach my $a (@$optdup_reads) {
-			$data->{opt_duplicates}{$a->qname} += 1;
+			
+			# write optical duplicate reads, and remember them so to write its pair
+			if ($markdups and scalar @$optdup_reads) {
+				foreach my $a (@$optdup_reads) {
+					$data->{opt_duplicates}{$a->qname} += 1;
+					mark_alignment($a);
+					&$write_alignment($data->{outbam}, $a);
+				}
+			}
+			elsif (scalar @$optdup_reads) {
+				foreach my $a (@$optdup_reads) {
+					$data->{opt_duplicates}{$a->qname} += 1;
+				}
+			}
 		}
 	}
 	
