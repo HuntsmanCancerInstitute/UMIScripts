@@ -464,8 +464,12 @@ sub deduplicate_multithread {
 		low_level_bam_fetch($sam, $tid, 0, $seq_length, \&callback, $data);
 	
 		# check to make sure we don't leave something behind
-		if (defined $data->{single_reads}->[0] or defined $data->{paired_reads}->[0]) {
-			write_reads($data);
+		if (defined $data->{single_reads}->[0]) {
+			write_se_reads($data) ;
+		}
+		# then paired
+		if (defined $data->{paired_reads}->[0]) {
+			write_pe_reads($data) ;
 		}
 		
 		# warnings
@@ -577,16 +581,21 @@ sub callback {
 	if ($a->pos > $data->{position}) {
 		# current position is beyond last one
 		# must dump reads to disk
-		if (defined $data->{single_reads}->[0] or defined $data->{paired_reads}->[0]) {
-			write_reads($data);
-			# reset
-			$data->{position} = $a->pos;
-			$data->{single_reads} = [];
-			$data->{paired_reads} = [];
+		# arbitrarily write single end reads first
+		if (defined $data->{single_reads}->[0]) {
+			write_se_reads($data) ;
 		}
+		# then paired
+		if (defined $data->{paired_reads}->[0]) {
+			write_pe_reads($data) ;
+		}
+		# reset
+		$data->{position} = $a->pos;
+		$data->{single_reads} = [];
+		$data->{paired_reads} = [];
 	}
 	
-	# Process alignment
+	# Process current alignment
 	if ($a->paired) {
 		# paired alignment
 		
@@ -623,20 +632,9 @@ sub callback {
 }
 
 
-sub write_reads {
-	my $data = shift;
-	
-	# arbitrarily write single end reads first
-	write_se_reads($data) if defined $data->{single_reads}->[0];
-	
-	# then paired
-	write_pe_reads($data) if defined $data->{paired_reads}->[0];
-}
-
-
 ### write single-end alignments 
 sub write_se_reads {
-	my $data = shift;
+	my $data = $_[0];
 	
 	# split up based on end point and strand
 	my %fends; # forward ends
@@ -759,7 +757,7 @@ sub write_se_reads_on_strand {
 
 ### Identify and write out paired-end alignments 
 sub write_pe_reads {
-	my $data = shift;
+	my $data = $_[0];
 	
 	# split up based on reported insertion size and strand
 	my %f_sizes;
@@ -929,8 +927,7 @@ sub write_pe_reads_on_strand {
 
 
 sub identify_optical_duplicates {
-	my $alignments = shift;
-	my $data = shift || undef; # this is only for reporting distances
+	my $alignments = $_[0];
 	
 	# check for only one alignment and quickly return
 	if (scalar @$alignments == 1) {
@@ -1118,6 +1115,7 @@ sub collapse_umi_hash {
 	# two (or more!?) mismatches, you can imagine hierarchical trees of relatedness
 	# but that's way too computationally intense for doing here, hence sorting is better 
 	# than nothing
+	# actually, unsorted gives variable results (!!!)
 	my @list = sort {$a cmp $b} keys %$tag2a;
 	while (scalar(@list) > 1) {
 		# compare first tag with the remainder
