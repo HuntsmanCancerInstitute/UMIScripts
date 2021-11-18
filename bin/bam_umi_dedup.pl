@@ -16,7 +16,7 @@ use Getopt::Long;
 use File::Which;
 use IO::File;
 use List::Util qw(sum min max);
-use List::MoreUtils qw(firstidx);
+use List::MoreUtils qw(bsearch_remove);
 use Parallel::ForkManager;
 use Text::Levenshtein::Flexible;
 	# this Levenshtein module is preferred over others available specifically 
@@ -1125,17 +1125,14 @@ sub collapse_umi_hash {
 		my @results = $Calculator->distance_lc_all($first, @list);
 		
 		# check results
-		if (@results) {
+		if (scalar @results) {
 			# combine alignments for matching tags, then delete the hash entry
 			foreach (@results) {
 				my $t = $_->[0]; # result is array of [word, distance]
-				push @{ $tag2a->{$first} }, @{$tag2a->{$t}};
+				push @{ $tag2a->{$first} }, @{ $tag2a->{$t} };
 				delete $tag2a->{$t};
 				# remove this from the list
-				my $i = firstidx {$_ eq $t} @list;
-				if (defined $i) {
-					splice @list, $i, 1;
-				}
+				bsearch_remove { $_ cmp $t } @list;
 			}
 		}
 	}
