@@ -54,7 +54,7 @@ my $infile;
 my $outfile;
 my $umi_location = 'RX';
 my $markdups;
-my $mismatch = 1;
+my $edit_tolerance = 1;
 my $indel_score = 1;
 my $opt_distance = 0;
 my $name_coordinates;
@@ -135,7 +135,7 @@ OPTIONS:
     -u --umi <string>     SAM tag name for UMI sequence. Default 'RX'
                             Specify 'name' when UMI appended to read name.
     -m --mark             Mark duplicates (flag 0x400) instead of discarding
-    -t --tolerance <int>  UMI sequence mismatch tolerance ($mismatch)
+    -t --tolerance <int>  UMI sequence edit distance tolerance ($edit_tolerance)
     --indel <int>         Set insertion/deletion penalty score ($indel_score)
 
   Other options:
@@ -162,7 +162,7 @@ GetOptions(
 	'o|out=s'       => \$outfile, # name of output file 
 	'u|umi=s'       => \$umi_location, # the location where the UMI tag is stored
 	'm|mark!'       => \$markdups, # set duplicate flag instead of removing
-	't|tolerance=i' => \$mismatch, # number mismatches allowed
+	't|tolerance=i' => \$edit_tolerance, # number mismatches allowed
 	'indel=i'       => \$indel_score, # weight for indel scoring in calculating distance
 	'd|distance=i'  => \$opt_distance, # optical pixel distance
 	'coord=s'       => \$name_coordinates, # tile:X:Y name positions
@@ -271,7 +271,7 @@ my $htext = $header->text;
 	$htext .= sprintf("VN:%s\tCL:%s", $VERSION, $0);
 	$htext .= " --in $infile --out $outfile --tag $umi_location";
 	$htext .= " --mark" if $markdups;
-	$htext .= " --tolerance $mismatch --indel $indel_score";
+	$htext .= " --tolerance $edit_tolerance --indel $indel_score";
 	$htext .= " --distance $opt_distance" if $opt_distance;
 	$htext .= " --coord $name_coordinates" if $name_coordinates and $opt_distance;
 	$htext .= " --samtools $sam_app" if $sam_app;
@@ -428,12 +428,12 @@ sub deduplicate_multithread {
 		$tempbam->header_write($header);
 		
 		# prepare distance calculator
-		my $Calculator;
-		if ($mismatch) {
+		my $Levenshtein;
+		if ($edit_tolerance) {
 			# set maximum distance allowed to user-defined mismatch level
-			# set scoring weights of insertion 10, deletion 10, substitution 1
-			$Calculator = Text::Levenshtein::Flexible->new(
-				$mismatch, $indel_score, $indel_score, 1) or 
+			# set weights: max_edit, cost_insertion, cost_deletion, cost_substitution
+			$Levenshtein = Text::Levenshtein::Flexible->new(
+				$edit_tolerance, $indel_score, $indel_score, 1) or 
 				die "unable to initiate Text::Levenshtein::Flexible object! $!";
 		}
 		
@@ -456,7 +456,7 @@ sub deduplicate_multithread {
 			keepers             => {},
 			duplicates          => {},
 			opt_duplicates      => {},
-			calculator          => $Calculator
+			calculator          => $Levenshtein
 		};
 	
 		# walk through the reads on the chromosome
@@ -492,7 +492,7 @@ sub deduplicate_multithread {
 		delete $data->{opt_duplicates};
 		delete $data->{calculator};
 		undef $tempbam;
-		undef $Calculator;
+		undef $Levenshtein;
 		$pm->finish(0, $data); 
 	}
 	$pm->wait_all_children;
@@ -686,7 +686,7 @@ sub write_se_reads_on_strand {
 	}
 
 	# first collapse UMI tags based on mismatches
-	if ($mismatch and scalar(keys %tag2reads) > 1) {
+	if ($edit_tolerance and scalar(keys %tag2reads) > 1) {
 		collapse_umi_hash(\%tag2reads, $data->{calculator});
 	}
 
@@ -837,7 +837,7 @@ sub write_pe_reads_on_strand {
 	}
 	
 	# Collapse UMI tags based on mismatches
-	if ($mismatch and scalar(keys %tag2reads) > 1) {
+	if ($edit_tolerance and scalar(keys %tag2reads) > 1) {
 		collapse_umi_hash(\%tag2reads, $data->{calculator});
 	}
 	
@@ -1111,7 +1111,7 @@ sub get_umi_from_tag {
 }
 
 sub collapse_umi_hash {
-	my ($tag2a, $Calculator) = @_;
+	my ($tag2a, $Levenshtein) = @_;
 	# create first list from all the available UMI sequences
 	# we always sort the list so that we can merge similar tags in a systematic 
 	# fashion rather than randomly, shouldn't matter for single mismatches, but for 
@@ -1122,7 +1122,7 @@ sub collapse_umi_hash {
 	while (scalar(@list) > 1) {
 		# compare first tag with the remainder
 		my $first = shift @list;
-		my @results = $Calculator->distance_lc_all($first, @list);
+		my @results = $Levenshtein->distance_lc_all($first, @list);
 		
 		# check results
 		if (scalar @results) {
