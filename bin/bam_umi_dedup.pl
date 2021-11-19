@@ -57,6 +57,7 @@ my $markdups;
 my $edit_tolerance = 1;
 my $indel_score = 1;
 my $opt_distance = 0;
+my $skip_mismatch_depth = 5000;
 my $name_coordinates;
 my $cpu = 4;
 my $no_sam;
@@ -88,12 +89,15 @@ UMI sequences may be embedded in alignments in one of two locations:
 
 At each chromosomal position, one representative alignment is selected
 amongst all represented UMI sequences and the remainder are discarded
-(default) or marked as duplicate (bit flag 0x400) and retained. UMI
-sequence tags can tolerate mismatches up to the indicated number;
-insertions or deletions are not tolerated. In general, longer UMI sequences
-should tolerate more mismatches, but at the risk of missing optimal
-matches. Increased tolerance results in decreased UMI-unique alignments.
+(default) or marked as duplicate (bit flag 0x400) and retained. 
 Alignments without a detectable UMI flag are simply written out. 
+
+UMI sequence tags can tolerate mismatches up to the indicated number.
+Insertions or deletions are also tolerated, but can be ignored by 
+increasing their penalty score. In general, longer UMI sequences
+should tolerate more mismatches. Allowing for mismatches can increase 
+runtime considerably; hence a maximum depth threshold is enforced for 
+detecting mismatches to preserve execution efficiency.
 
 Selection criteria amongst UMI-duplicates include the mapping qualities of
 the alignment (and possibly mate pair using tag 'MQ' if present) or the sum
@@ -103,7 +107,7 @@ fixmate tag 'ms').
 Optical duplicate checking may be optionally included by specifying the
 pixel distance threshold for marking as duplicates. Tile coordinates must
 be present in the alignment read name. Optical duplicates are not 
-distinguished from UMI duplicates when marking.
+distinguished from UMI duplicates when marking. 
 
 Bam files must be sorted by coordinate. Bam files may be indexed as
 necessary. Unmapped (flag 0x4) alignments are silently discarded. Read
@@ -137,6 +141,7 @@ OPTIONS:
     -m --mark             Mark duplicates (flag 0x400) instead of discarding
     -t --tolerance <int>  UMI sequence edit distance tolerance ($edit_tolerance)
     --indel <int>         Set insertion/deletion penalty score ($indel_score)
+    --skip <int>          Skip mismatch detection if depth exceeds ($skip_mismatch_depth)
 
   Other options:
     -d --distance <int>   Set optical duplicate distance threshold.
@@ -166,6 +171,7 @@ GetOptions(
 	'indel=i'       => \$indel_score, # weight for indel scoring in calculating distance
 	'd|distance=i'  => \$opt_distance, # optical pixel distance
 	'coord=s'       => \$name_coordinates, # tile:X:Y name positions
+	'skip=i'        => \$skip_mismatch_depth, # maximum allowed depth for umi mismatch 
 	'c|cpu=i'       => \$cpu, # number of cpu cores to use
 	'p|pe!'         => \$paired, # legacy flag for paired-end alignments
 	's|secondary!'  => \$keep_secondary, # legacy flag to keep secondary alignments 
@@ -1117,6 +1123,18 @@ sub collapse_umi_hash {
 	# than nothing
 	# actually, unsorted gives variable results (!!!)
 	my @list = sort {$a cmp $b} keys %$tag2a;
+	
+	# check for extreme depth
+	if (scalar @list > $skip_mismatch_depth) {
+		my $example = $tag2a->{$list[0]}->[0];
+		printf " ! skipping mismatch detection with depth of %d at %s:%d\n", 
+			scalar(@list), 
+			$sam->target_name($example->tid),
+			$example->pos;
+		return;
+	}
+	
+	# collapse
 	while (scalar(@list) > 1) {
 		# compare first tag with the remainder
 		my $first = shift @list;
