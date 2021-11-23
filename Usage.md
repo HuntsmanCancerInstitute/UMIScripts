@@ -23,7 +23,7 @@ Keeping the UMI during the alignment step is tricky. It can't be part of the pri
 read, since it won't align to the genome, so it has to be associated through the use
 of alignment tags. The current [SAM
 specification](http://samtools.github.io/hts-specs/SAMtags.pdf) uses the `RX` tag for
-unique molecular index sequences. 
+unique molecular index sequences, along with `QX` for UMI sequence quality. 
 
 Unfortunately, by default, the Fastq file format doesn't allow for the use of extra
 metadata, so alternatives must be made.
@@ -186,8 +186,8 @@ is painfully slow! It can only accommodate UMI sequences in a SAM attribute tag,
 
 ### UMIScripts
 
-The included de-deduplication script is considerably faster, but with a notable 
-caveat: no guarantee is made for retaining identical molecules at secondary, 
+The included de-deduplication script is considerably faster, but with a **notable 
+caveat**: no guarantee is made for retaining identical molecules at secondary, 
 supplementary, and inter-chromosomal alignments (they are treated independently). 
 Otherwise, for normal alignments, results are comparable to Picard. For most 
 count-based applications such as ChIPSeq or RNASeq, this limitation may be acceptable.
@@ -202,6 +202,12 @@ For de-duplication with SAM attribute tag `RX` (default):
 For de-duplication with the UMI appended to the read name:
 
     bam_umi_dedup.pl --in input.bam --out output.bam --umi name --cpu $CPU
+
+By default, one mismatch is tolerated when de-duplicating with UMI sequences. 
+**Note** that extreme depth may substantially slow down execution time when mismatches 
+are tolerated. For `bam_umi_dedup`, a maximum depth is allowed for mismatch tolerance 
+before mismatch checking is dropped to avoid extreme impact (runtime of days). Dropping
+mismatch tolerance completely will also improve runtime.
 
 
 For a human (hg38) WGS Bam file with 668M alignments, the Picard tool (version 2.26.3) 

@@ -75,7 +75,8 @@ on coordinates and UMI sequence. They work on files only (no streaming).
     may be marked or removed based on coordinate, strand, and UMI sequence. UMI 
     duplicates are selected based on highest quality scores (mapping and base quality). 
     All single-end, proper paired-end, supplementary, and secondary alignments are 
-    processed, with caveats. 
+    processed, with caveats: supplementary, chimeric, secondary, and mate pairs on 
+    separate chromosomes are treated independently. 
 
 ### Deprecated
 
