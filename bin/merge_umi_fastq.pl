@@ -14,11 +14,23 @@
 use strict;
 use IO::File;
 use IO::Handle;
-use Getopt::Long;
+use Getopt::Long qw(:config no_ignore_case);
+use Bio::UMIScripts::FastqHelper qw(
+	read_fastq_filehandle
+	write_fastq_filehandle
+	write_bam_filehandle
+	get_fastq_read
+);
+use Bio::UMIScripts::UMIHelper qw(
+	umi_sam_tags_from_fastq_read
+	extract_umi_with_fixed_from_fastq
+	extract_umi_from_fastq
+	name_append_umi_from_fastq_read
+);
 
 ########################################
 
-my $VERSION = 0.1;
+my $VERSION = 1;
 
 
 ### Options
@@ -30,15 +42,9 @@ my $outfile;
 my $sam_format;
 my $append_name;
 my $keep_sample;
-my $cpu = 4;
-my $sam_app = sprintf("%s", qx(which samtools));
-my $pigz_app = sprintf("%s", qx(which pigz));
-my $gzip_app = sprintf("%s", qx(which gzip));
+my $cpu = 3;
 my $help;
-
-chomp $sam_app;
-chomp $pigz_app;
-chomp $gzip_app;
+my $start_time = time;
 
 
 my $description = <<END;
@@ -92,25 +98,24 @@ OPTIONS:
     -1 --read1 <file>     First fastq read
     -2 --read2 <file>     Second fastq read, optional
     -u --umi <file>       UMI fastq read
-    --umi2 <file>         Second UMI fastq file, optional
+    -U --umi2 <file>      Second UMI fastq file, optional
+  
   Output:
-    -o --out <file>       Path to output (input basename)
+    -o --out <file>       Output file (base)name (input basename)
                             use 'stdout' for (interleaved) piping
-    -b --bam              Write output as unaligned Bam format
+    -b --bam              Write output as unaligned BAM format
                             or SAM format if stdout or samtools unavailable 
-  Options:
     -n --name             Append UMI to read name instead of SAM tag RX
-    -k --keepbc           Keep existing Illumina CASAVA sample barcode
-                            from read description if present
+  
   Other:
-    --samtools <path>     Path to samtools ($sam_app)
+    --samtools <path>     Path to samtools ($Bio::UMIScripts::FastqRead::SAMTOOLS_APP)
     -h --help             Show full description and help
 
 END
 
 unless (@ARGV) {
 	print $usage;
-	exit;
+	exit 0;
 }
 
 # get command line options
@@ -118,21 +123,15 @@ GetOptions(
 	'1|read1=s'         => \$read_file1, # first fastq file
 	'2|read2=s'         => \$read_file2, # second fastq file
 	'u|umi1=s'          => \$umi_file1, # first umi fastq file
-	'umi2=s'            => \$umi_file2, # second umi fastq file
+	'U|umi2=s'          => \$umi_file2, # second umi fastq file
 	'o|out=s'           => \$outfile, # output file base name
 	'b|bam!'            => \$sam_format, # output sam format
 	'n|name!'           => \$append_name, # append UMI to name
 	'k|keepbc!'         => \$keep_sample, # keep the sample bar code
-	'samtools=s'        => \$sam_app, # samtools application
+	'samtools=s'        => \$Bio::UMIScripts::FastqRead::SAMTOOLS_APP, # samtools application
 	'cpu=i'             => \$cpu, # number of CPU cores for compression
 	'h|help'            => \$help, # print help
 ) or die "bad options!\n";
-
-if ($help) {
-	print $description;
-	print $usage;
-	exit 0;
-}
 
 
 
@@ -142,9 +141,9 @@ if ($help) {
 if (not $read_file1 and not $umi_file1 and scalar @ARGV) {
 	# user provided unordered list of fastq files
 	# sort them out by size
-	my @list = 
+	my @list =
 		sort {$b->[1] <=> $a->[1]}      # decreasing size
-		map { [$_, (stat($_))[7] ] }    # array of filename and size <- 8th element from stat array
+		map { [$_, (stat $_)[7] ] }    # array of filename and size <- 8th element from stat array
 		@ARGV;
 	if (scalar @list == 2) {
 		# one fastq and one umi
@@ -154,7 +153,7 @@ if (not $read_file1 and not $umi_file1 and scalar @ARGV) {
 	elsif (scalar @list == 3) {
 		# two fastq and one umi
 		# sort the fastq names asciibetically to get read1 and read2
-		($read_file1, $read_file2) = 
+		($read_file1, $read_file2) =
 			map {$_->[0]}
 			sort {$a->[0] cmp $b->[0]}
 			($list[0], $list[1]);
@@ -163,11 +162,11 @@ if (not $read_file1 and not $umi_file1 and scalar @ARGV) {
 	elsif (scalar @list == 4) {
 		# two fastq and two umi
 		# sort the fastq names asciibetically to get read1 and read2
-		($read_file1, $read_file2) = 
+		($read_file1, $read_file2) =
 			map {$_->[0]}
 			sort {$a->[0] cmp $b->[0]}
 			($list[0], $list[1]);
-		($umi_file1, $umi_file2) = 
+		($umi_file1, $umi_file2) =
 			map {$_->[0]}
 			sort {$a->[0] cmp $b->[0]}
 			($list[2], $list[3]);
@@ -193,10 +192,7 @@ if ($outfile and $outfile =~ /\.[s|b]am(?:\.gz)?$/) {
 	# convenience
 	$sam_format = 1;
 }
-if ($sam_format and $outfile and $outfile !~ /\.bam$/) {
-	$outfile .= '.bam';
-}
-if ($sam_format and not $sam_app) {
+if ($sam_format and not $Bio::UMIScripts::FastqRead::SAMTOOLS_APP) {
 	if ($outfile and $outfile =~ m/\.bam$/) {
 		$outfile =~ s/\bam$/sam.gz/;
 		print STDERR "samtools application is not present. Writing to $outfile\n";
@@ -205,15 +201,29 @@ if ($sam_format and not $sam_app) {
 
 
 
-
-
 ### Open input filehandles
-my ($read_fh1, $read_fh2, $umi_fh1, $umi_fh2);
 
-$read_fh1 = open_input($read_file1);
-$read_fh2 = open_input($read_file2) if $read_file2;
-$umi_fh1  = open_input($umi_file1);
-$umi_fh2  = open_input($read_file2) if $read_file2;
+# Read fastq files
+my ($read_fh1, $read_fh2);
+$read_fh1 = read_fastq_filehandle($read_file1);
+$read_fh2 = read_fastq_filehandle($read_file2) if $read_file2;
+
+
+# UMI fastq files
+# also set the subroutine callback for working with either one or two UMI files
+my ($umi_fh1, $umi_fh2, $read_umi);
+$umi_fh1  = read_fastq_filehandle($umi_file1);
+if ($umi_file2) {
+	# working with two UMI fastq files
+	$umi_fh2  = read_fastq_filehandle($umi_file2) ;
+	
+	# set the UMI read subroutine
+	$read_umi = \&read_two_umi_fastq;
+}
+else {
+	# working with one UMI fastq file
+	$read_umi = \&read_one_umi_fastq;
+}
 
 
 
@@ -221,71 +231,74 @@ $umi_fh2  = open_input($read_file2) if $read_file2;
 
 ### Open output filehandles
 my ($out_fh1, $out_fh2);
-if ($outfile =~ /^stdout$/i) {
-	# writing everything to standard output
-	# this is overkill, but just to make things consistent, 
-	# open an IO::Handle to STDOUT
-	$out_fh1 = IO::Handle->new;
-	$out_fh1->fdopen(fileno(STDOUT), 'w');
-	if ($read_file2) {
-		# reuse the same output 
-		$out_fh2 = $out_fh1;
+
+if (not $outfile) {
+	if ($read_file2 and not $sam_format) {
+		# open two separate output handles
+		$outfile = $read_file1;
+		$outfile =~ s/\.(txt|fq|fastq)/.umi.$1/;
+		$out_fh1 = write_fastq_filehandle($outfile, $cpu);
+		my $outfile2 = $read_file2;
+		$outfile2 =~ s/\.(txt|fq|fastq)/.umi.$1/;
+		$out_fh2 = write_fastq_filehandle($outfile2, $cpu);
 	}
-}
-elsif ($outfile =~ /\.bam$/ and $sam_format) {
-	# special case, write to external samtools to convert
-	print STDERR " Writing with $sam_app view -b -\@ $cpu to $outfile\n";
-	$out_fh1 = IO::File->new("| $sam_app view -b -@ $cpu -o $outfile - ") or 
-		die "unable to open output to $sam_app! $!\n";
-	if ($read_file2) {
-		# reuse the same output 
-		$out_fh2 = $out_fh1;
+	elsif (not $read_file2 and not $sam_format) {
+		# just one file output
+		$outfile = $read_file1;
+		$outfile =~ s/\.(txt|fq|fastq)/.umi.$1/;
+		$out_fh1 = write_fastq_filehandle($outfile, $cpu);
 	}
-}
-elsif ($outfile =~ /\.sam/ and $sam_format) {
-	# write to sam file
-	$out_fh1 = open_output($read_file1, 1); 
-	if ($read_file2) {
-		# reuse the same output 
-		$out_fh2 = $out_fh1;
+	elsif ($read_file2 and $sam_format) {
+		# open one bam output handle for both
+		$outfile = $read_file1;
+		$outfile =~ s/\.(?:txt|fq|fastq)(?:\.gz)?$/.bam/;
+		$out_fh1 = write_bam_filehandle($outfile, $cpu);
+		$out_fh2 = $out_fh2;
 	}
-}
-elsif (not $outfile and $sam_format) {
-	# write to sam or bam file depending on availability of samtools
-	if ($sam_app) {
-		# write to bam file with samtools
+	elsif (not $read_file2 and $sam_format) {
+		# just one file output
 		$outfile = $read_file1;
 		$outfile =~ s/\.(?:fq|fastq)(?:\.gz)?$/.bam/;
-		print STDERR " Writing with $sam_app view -b -\@ $cpu to $outfile\n";
-		$out_fh1 = IO::File->new("| $sam_app view -b -@ $cpu -o $outfile - ") or 
-			die "unable to open output to $sam_app! $!\n";
-		if ($read_file2) {
-			# reuse the same output 
-			$out_fh2 = $out_fh1;
-		}
+		$out_fh1 = write_bam_filehandle($outfile, $cpu);
 	}
 	else {
-		# write to text sam file
-		$out_fh1 = open_output($read_file1, 1); 
-		if ($read_file2) {
-			# reuse the same output 
-			$out_fh2 = $out_fh1;
-		}
+		die "programming error:\n outfile $outfile\n sam format $sam_format\n first file $read_file1\n second file $read_file2\n";
+	}
+}
+elsif ($outfile and (lc($outfile) eq 'stdout' )) {
+	$out_fh1 = write_fastq_filehandle($outfile); # this can handle stdout too
+	if ($read_file2) {
+		# reuse the same output 
+		$out_fh2 = $out_fh1;
+	}
+}
+elsif ($outfile and $sam_format) {
+	unless ($outfile =~ /\.bam$/) {
+		$outfile .= '.bam';
+	}
+	$out_fh1 = write_bam_filehandle($outfile, $cpu);
+	if ($read_file2) {
+		# reuse the same output 
+		$out_fh2 = $out_fh1;
+	}
+}
+elsif ($outfile and not $sam_format) {
+	# writing fastq text file output for both files
+	# use given out file as a base and make up extension
+	my $outfile1 = $outfile . '.1.fastq.gz';
+	$out_fh1 = write_fastq_filehandle($outfile1, $cpu);
+	if ($read_file2) {
+		my $outfile2 = $outfile . '.2.fastq.gz';
+		$out_fh2 = write_fastq_filehandle($outfile2, $cpu);
 	}
 }
 else {
-	# writing fastq text file output
-	$out_fh1 = open_output($read_file1, 1); 
-	if ($read_file2 and not $sam_format) {
-		# ordinary second fastq file
-		$out_fh2 = open_output($read_file2, 2);
-	}
+	die "programming error:\n outfile $outfile\n sam format $sam_format\n first file $read_file1\n second file $read_file2\n";
 }
 
 
 ### Write sam header as necessary
 if ($sam_format) {
-	$out_fh1->print("\@HD\tVN:1.6\tSO:unsorted\n");
 	my $cl = "$0 --read1 $read_file1 ";
 	$cl .= "--read2  $read_file2 " if $read_file2;
 	$cl .= "--umi $umi_file1 ";
@@ -297,10 +310,7 @@ if ($sam_format) {
 	$out_fh1->print("\@PG\tID:merge_umi_fastq\tVN:$VERSION\tCL:$cl\n");
 }
 
-
-
-
-# define flags
+# define SAM flags
 	# 0x4d	77	PAIRED,UNMAP,MUNMAP,READ1
 	# 0x8d	141	PAIRED,UNMAP,MUNMAP,READ2
 	# 0x4   4   UNMAP 
@@ -310,167 +320,41 @@ my $flag2 = 141;
 
 
 
-#### Iterate through files
-my $goodCount = 0;
-while (my $header1  = $read_fh1->getline) {
-	my $sequence1 = $read_fh1->getline or die "malformed file $read_file1! no sequence line";
-	my $spacer1 = $read_fh1->getline or die "malformed file $read_file1! no sequence line";
-	my $quality1 = $read_fh1->getline or die "malformed file $read_file1! no sequence line";
-	
-	# first UMI
-	my $umi_head1 = $umi_fh1->getline or die "malformed file $umi_file1! no sequence line";
-	my $umi_seq1 = $umi_fh1->getline or die "malformed file $umi_file1! no sequence line";
-	my $umi_space1 = $umi_fh1->getline or die "malformed file $umi_file1! no sequence line";
-	my $umi_qual1 = $umi_fh1->getline or die "malformed file $umi_file1! no sequence line";
-	
-	# start chomping as needed
-	chomp $header1;
-	chomp $sequence1;
-	chomp $quality1;
-	chomp $umi_seq1;
-	chomp $umi_qual1;
-	
-	# split the first header
-	my ($r_name1, $r_desc1) = split / +/, $header1, 2;
-	my ($u_name1, $u_desc1) = split / +/, $umi_head1, 2;
-	
-	# basic header check
-	unless ($r_name1 eq $u_name1) {
-		die "malformed fastq files! sequence IDs from files don't match! compare\n" . 
-			" $read_file1: $header1\n $umi_file1: $umi_head1\n";
-	}
-		
-	# second UMI if present
-	my ($umi_seq, $umi_qual);
-	if ($umi_file2) {
-		# read
-		my $umi_head2 = $umi_fh2->getline or die "malformed file $umi_file2! no sequence line";
-		my $umi_seq2 = $umi_fh2->getline or die "malformed file $umi_file2! no sequence line";
-		my $umi_space2 = $umi_fh2->getline or die "malformed file $umi_file2! no sequence line";
-		my $umi_qual2 = $umi_fh2->getline or die "malformed file $umi_file2! no sequence line";
-		
-		# check
-		my ($u_name2, $u_desc2) = split / +/, $umi_head2, 2;
-		unless ($u_name1 eq $u_name2) {
-			die "malformed UMI fastq files! sequence IDs from files don't match! compare\n" . 
-				" $umi_file1: $umi_head1\n $umi_file2: $umi_head2\n";
-		}
-		
-		# assemble based on SAM spec
-		$umi_seq = join('-', $umi_seq1, $umi_seq2);
-		$umi_qual = join(' ', $umi_qual1, $umi_qual2);
-	}
-	else {
-		# only one file, easy
-		$umi_seq = $umi_seq1;
-		$umi_qual = $umi_qual1;
-	}
-	
-	# compose tags
-	my $new_name = $append_name ? "$r_name1:$umi_seq" : $r_name1;
-	my $tags = "RX:Z:$umi_seq\tQX:Z:$umi_qual";
-	if ($keep_sample and $r_desc1 =~ m/\d+:\w:\d+:([ATGCN]+[\+\-]?[ATGCN]*)/) {
-		$tags .= "\tBC:Z:$1";
-	}
-	
-	# output first line
+
+
+
+#### MAIN 
+
+my $count;
+if ($read_file2) {
+	# paired-end
 	if ($sam_format) {
-		# compose a SAM formatted line and print
-		$out_fh1->printf("%s\n", join("\t", 
-			substr($r_name1,1), # QNAME minus the leading @ symbol
-			$flag1,             # FLAG
-			'*',                # RNAME
-			0,                  # POS
-			0,                  # MAPQ
-			'*',                # CIGAR
-			'*',                # RNEXT
-			0,                  # PNEXT
-			0,                  # TLEN
-			$sequence1,         # SEQ
-			$quality1,          # QUAL
-			$tags               # TAGS
-		) );
+		# write SAM file
+		$count = process_paired_sam();
 	}
 	elsif ($append_name) {
-		# compose a fastq line with appended read name header
-		$out_fh1->printf("%s:%s %s\n%s\n%s%s\n", 
-			$r_name1, $umi_seq, $r_desc1,   # HEADER
-			$sequence1,                     # SEQUENCE
-			$spacer1,                       # SPACER
-			$quality1                       # QUALITY
-		);
+		# append UMI to read name and write Fastq
+		$count = process_paired_name_append();
 	}
 	else {
-		# compose a fastq line with SAM tags
-		$out_fh1->printf("%s %s\n%s\n%s%s\n", 
-			$r_name1, $tags,                # HEADER
-			$sequence1,                     # SEQUENCE
-			$spacer1,                       # SPACER
-			$quality1                       # QUALITY
-		);
+		# put SAM tags in Fastq comment
+		$count = process_paired_fastq_tag();
 	}
-	
-	# second fastq file stuff
-	if ($read_file2) {
-		# read line
-		my $header2  = $read_fh2->getline or die "malformed file $read_file2! no header line";
-		my $sequence2 = $read_fh2->getline or die "malformed file $read_file2! no sequence line";
-		my $spacer2 = $read_fh2->getline or die "malformed file $read_file2! no spacer line";
-		my $quality2 = $read_fh2->getline or die "malformed file $read_file2! no quality line";
-		
-		# chomp as necessary
-		chomp $header2;
-		chomp $sequence2;
-		chomp $quality2;
-		
-		# split the first header
-		my ($r_name2, $r_desc2) = split / +/, $header2, 2;
-	
-		# basic header check
-		unless ($r_name1 eq $r_name2) {
-			die "malformed fastq files! sequence IDs from files don't match! compare\n" . 
-				" $read_file1: $header1\n $read_file2: $header2\n";
-		}
-		
-		# output second line
-		if ($sam_format) {
-			# compose a SAM formatted line and print
-			$out_fh2->printf("%s\n", join("\t", 
-				substr($r_name2,1), # QNAME minus the leading @ symbol
-				$flag2,             # FLAG
-				'*',                # RNAME
-				0,                  # POS
-				0,                  # MAPQ
-				'*',                # CIGAR
-				'*',                # RNEXT
-				0,                  # PNEXT
-				0,                  # TLEN
-				$sequence2,         # SEQ
-				$quality2,          # QUAL
-				$tags               # TAGS
-			) );
-		}
-		elsif ($append_name) {
-			# compose a fastq line with appended read name header
-			$out_fh2->printf("%s:%s %s\n%s\n%s%s\n", 
-				$r_name2, $umi_seq, $r_desc2,   # HEADER
-				$sequence2,                     # SEQUENCE
-				$spacer2,                       # SPACER
-				$quality2                       # QUALITY
-			);
-		}
-		else {
-			# compose a fastq line with SAM tags
-			$out_fh2->printf("%s %s\n%s\n%s%s\n", 
-				$r_name2, $tags,                # HEADER
-				$sequence2,                     # SEQUENCE
-				$spacer2,                       # SPACER
-				$quality2                       # QUALITY
-			);
-		}
+}
+else {
+	# single-end
+	if ($sam_format) {
+		# write SAM file
+		$count = process_single_sam();
 	}
-	
-	$goodCount++;
+	elsif ($append_name) {
+		# append UMI to read name and write Fastq
+		$count = process_single_name_append();
+	}
+	else {
+		# put SAM tags in Fastq comment
+		$count = process_single_fastq_tag();
+	}
 }
 
 # close all file handles
@@ -482,101 +366,204 @@ $out_fh1->close;
 $out_fh2->close if $out_fh2;
 
 
-
-
-#### Finish
-print STDERR " $goodCount reads were processed\n";
-
+# Finish
+printf STDERR " $count reads were processed in %.1f minutes\n", (time - $start_time) / 60;
 
 
 
-sub open_input {
-	my $file = shift;
-	my $fh;
-	if ($file =~ /\.gz$/i) {
-		# decompress with gzip
-		$fh = IO::File->new("$gzip_app -d -c $file |") or 
-			die "unable to open file $file! $!\n";
-	}
-	elsif ($file =~ /\.bz2$/) {
-		# hope for the best????
-		$fh = IO::File->new("bzip2 -d -c $file |") or 
-			die "unable to open file $file! $!\n";
+
+
+
+
+
+
+
+
+
+################ Subroutines
+
+sub read_two_umi_fastq {
+	my $check = shift;
+	my $umi1 = get_fastq_read($umi_fh1) or 
+		die "premature end of file for $umi_file1!";
+	my $umi2 = get_fastq_read($umi_fh2) or 
+		die "premature end of file for $umi_file2!";
+	if (
+		$check->compare_names($umi1) and 
+		$check->compare_names($umi2)
+	) {
+		# names match, let's merge the two
+		# official SAM format says to concatenate with a +
+		return $umi1->concatenate_reads($umi2);
 	}
 	else {
-		# why do we have an uncompressed file???? geez! 
-		$fh = IO::File->new($file) or 
-			die "unable to open file $file! $!\n";
+		printf STDERR " Mismatching read names!\n   Compare read %s with UMI1 %s and UMI2 %s\n",
+			$check->name, $umi1->name, $umi2->name;
+		return;
 	}
-	return $fh;
 }
 
-sub open_output {
-	my ($file, $index) = @_;
-	my $filename;
-	
-	# check for format and output file
-	if ($sam_format) {
-		# writing a SAM file, likely only one
-		# user may or may not have specified an output file
-		if ($outfile) {
-			# great! user specified
-			if ($outfile =~ /\.sam(\.gz)?$/) {
-				# has proper extension
-				$filename = $outfile;
-			}
-			else {
-				# add an extension
-				$outfile .= '.sam.gz';
-			}
-		}
-		else {
-			# no outfile, so make one up
-			$filename = $file;
-			$filename =~ s/(?:txt|fq|fastq)(?:\.gz)$/sam.gz/;
-		}
-	}
-	elsif ($outfile) {
-		if ($outfile =~ /\.(fq|fastq|fq\.gz|fastq\.gz)$/) {
-			# user provided extension?
-			my $ext = $1;
-			$filename = $outfile;
-			$filename =~ s/$ext\Z//;
-			$filename .= sprintf("_%s.%s", $index, $ext);
-		}
-		else {
-			# generate with extension, assume compression
-			$filename = sprintf("%s_%s.fastq.gz", $outfile, $index);
-		}
+sub read_one_umi_fastq {
+	my $check = shift;
+	my $umi1 = get_fastq_read($umi_fh1) or
+		die "premature end of file for $umi_file1!";
+	if ($check->compare_names($umi1)) {
+		# names match
+		return $umi1;
 	}
 	else {
-		# generate from input file
-		$filename = $file;
-		$filename =~ s/\.(?:txt|fq|fastq)(?:\.gz)$/.umi.fastq.gz/;
+		printf STDERR " Mismatching read names!\n   Compare read %s with UMI1 %s\n",
+			$check->name, $umi1->name;
+		return;
 	}
-	
-	# open filehandle
-	my $fh;
-	if ($filename =~ /\.gz$/) {
-		if ($pigz_app) {
-			print STDERR " Writing with $pigz_app -p $cpu to $filename\n";
-			$fh = IO::File->new("| $pigz_app -p $cpu -c > $filename") or 
-				die "cannot write to compressed file '$filename' $!\n";
-		}
-		else {
-			print STDERR " Writing with $gzip_app to $filename\n";
-			$fh = IO::File->new("| $gzip_app -c > $filename") or 
-				die "cannot write to compressed file '$filename' $!\n";
-		}
-	}
-	else {
-		print STDERR " Writing to $filename\n";
-		$fh = IO::File->new($filename, 'w') or 
-			die "cannot write to file '$filename' $!\n";
-	}
-	return $fh;
 }
 
+sub process_paired_sam {
+	# two paired-end fastq files written to sam/bam while keeping the sample barcode
+	print STDERR " Processing paired-end fastq files\n";
+	print STDERR " Writing output in SAM/BAM format with UMI tags\n";
+	my $i = 0;
+	while (my $read1 = get_fastq_read($read_fh1)) {
+		# second read
+		my $read2 = get_fastq_read($read_fh2) or
+			die "premature end of file for $read_file2!";
+		unless ($read1->compare_names($read2)) {
+			printf STDERR " Mismatching read names!\n   Compare read1 %s with read2 %s\n",
+				$read1->name, $read2->name;
+			die "mismatched files!";
+		}
+		
+		# UMI tags
+		my $umi = &$read_umi($read1) or die "mismatched files!";
+		my $tag = umi_sam_tags_from_fastq_read($umi);
+		
+		# first read
+		$out_fh1->print( $read1->sam_string($flag1, $tag) );
+		
+		# second read
+		$out_fh1->print( $read2->sam_string($flag2, $tag) );
+		
+		$i++;
+	}
+	return $i;
+}
+
+sub process_paired_name_append {
+	# two paired-end fastq files written to fastq with UMI appended to read names 
+	# sample barcode will automatically be kept, if present
+	print STDERR " Processing paired-end fastq files\n";
+	print STDERR " Appending UMI to read name\n";
+	my $i = 0;
+	while (my $read1 = get_fastq_read($read_fh1)) {
+		# second read
+		my $read2 = get_fastq_read($read_fh2) or
+			die "premature end of file for $read_file2!";
+		unless ($read1->compare_names($read2)) {
+			printf STDERR " Mismatching read names!\n   Compare read1 %s with read2 %s\n",
+				$read1->name, $read2->name;
+			die "mismatched files!";
+		}
+		
+		# UMI 
+		my $umi = &$read_umi($read1) or die "mismatched files!";
+		
+		# first read
+		name_append_umi_from_fastq_read($read1, $umi);
+		$out_fh1->print( $read1->fastq_string );
+		
+		# second read
+		name_append_umi_from_fastq_read($read2, $umi);
+		$out_fh2->print( $read2->fastq_string );
+		
+		$i++;
+	}
+	return $i;
+}
+
+sub process_paired_fastq_tag {
+	# two paired-end fastq files written to fastq with UMI as SAM tags
+	print STDERR " Processing paired-end fastq files\n";
+	print STDERR " Appending UMI as SAM tags to read comment\n";
+	my $i = 0;
+	while (my $read1 = get_fastq_read($read_fh1)) {
+		# second read
+		my $read2 = get_fastq_read($read_fh2) or
+			die "premature end of file for $read_file2!";
+		unless ($read1->compare_names($read2)) {
+			printf STDERR " Mismatching read names!\n   Compare read1 %s with read2 %s\n",
+				$read1->name, $read2->name;
+			die "mismatched files!";
+		}
+		
+		# UMI 
+		my $umi = &$read_umi($read1) or die "mismatched files!";
+		my $tag = umi_sam_tags_from_fastq_read($umi);
+		
+		# first read
+		$out_fh1->print( $read1->fastq_string($tag) );
+		
+		# second read
+		$out_fh2->print( $read2->fastq_string($tag) );
+		
+		$i++;
+	}
+	return $i;
+}
+
+sub process_single_name_append {
+	# single-end fastq files written to fastq with UMI appended to read names 
+	# sample barcode will automatically be kept, if present
+	print STDERR " Processing single-end fastq file\n";
+	print STDERR " Appending UMI to read name\n";
+	my $i = 0;
+	while (my $read1 = get_fastq_read($read_fh1)) {
+		# UMI 
+		my $umi = &$read_umi($read1) or die "mismatched files!";
+		
+		# first read
+		name_append_umi_from_fastq_read($read1, $umi);
+		$out_fh1->print( $read1->fastq_string );
+		
+		$i++;
+	}
+	return $i;
+}
+
+sub process_single_sam {
+	# single-end fastq files written to sam/bam
+	print STDERR " Processing single-end fastq file\n";
+	print STDERR " Writing output in SAM/BAM format with UMI tags\n";
+	my $i = 0;
+	while (my $read1 = get_fastq_read($read_fh1)) {
+		# UMI tags
+		my $umi = &$read_umi($read1) or die "mismatched files!";
+		my $tag = umi_sam_tags_from_fastq_read($umi);
+		
+		# first read
+		$out_fh1->print( $read1->sam_string($flag1, $tag) );
+		
+		$i++;
+	}
+	return $i;
+}
+
+sub process_single_fastq_tag {
+	# single-end fastq files written to fastq with UMI as SAM tags
+	print STDERR " Processing single-end fastq file\n";
+	print STDERR " Appending UMI as SAM tags to read comment\n";
+	my $i = 0;
+	while (my $read1 = get_fastq_read($read_fh1)) {
+		# UMI 
+		my $umi = &$read_umi($read1) or die "mismatched files!";
+		my $tag = umi_sam_tags_from_fastq_read($umi);
+		
+		# first read
+		$out_fh1->print( $read1->fastq_string($tag) );
+		
+		$i++;
+	}
+	return $i;
+}
 
 
 
