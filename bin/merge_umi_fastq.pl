@@ -20,6 +20,7 @@ use Bio::UMIScripts::FastqHelper qw(
 	write_fastq_filehandle
 	write_bam_filehandle
 	get_fastq_read
+	$SAMTOOLS_APP
 );
 use Bio::UMIScripts::UMIHelper qw(
 	umi_sam_tags_from_fastq_read
@@ -30,7 +31,7 @@ use Bio::UMIScripts::UMIHelper qw(
 
 ########################################
 
-my $VERSION = 1;
+my $VERSION = 1.01;
 
 
 ### Options
@@ -108,7 +109,7 @@ OPTIONS:
     -n --name             Append UMI to read name instead of SAM tag RX
   
   Other:
-    --samtools <path>     Path to samtools ($Bio::UMIScripts::FastqRead::SAMTOOLS_APP)
+    --samtools <path>     Path to samtools ($SAMTOOLS_APP)
     -h --help             Show full description and help
 
 END
@@ -128,7 +129,7 @@ GetOptions(
 	'b|bam!'            => \$sam_format, # output sam format
 	'n|name!'           => \$append_name, # append UMI to name
 	'k|keepbc!'         => \$keep_sample, # keep the sample bar code
-	'samtools=s'        => \$Bio::UMIScripts::FastqRead::SAMTOOLS_APP, # samtools application
+	'samtools=s'        => \$SAMTOOLS_APP, # samtools application
 	'cpu=i'             => \$cpu, # number of CPU cores for compression
 	'h|help'            => \$help, # print help
 ) or die "bad options!\n";
@@ -192,9 +193,9 @@ if ($outfile and $outfile =~ /\.[s|b]am(?:\.gz)?$/) {
 	# convenience
 	$sam_format = 1;
 }
-if ($sam_format and not $Bio::UMIScripts::FastqRead::SAMTOOLS_APP) {
+if ($sam_format and not $SAMTOOLS_APP) {
 	if ($outfile and $outfile =~ m/\.bam$/) {
-		$outfile =~ s/\bam$/sam.gz/;
+		$outfile =~ s/bam$/sam.gz/;
 		print STDERR "samtools application is not present. Writing to $outfile\n";
 	}
 }

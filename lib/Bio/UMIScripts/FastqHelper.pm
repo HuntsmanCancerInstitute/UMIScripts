@@ -1,5 +1,5 @@
 package Bio::UMIScripts::FastqHelper;
-our $VERSION = 5;
+our $VERSION = 5.01;
 
 =head1 Bio::UMIScripts::FastqHelper - Fastq helper routines for UMIScripts
 
@@ -108,6 +108,7 @@ our @EXPORT_OK = qw(
 	write_fastq_filehandle
 	write_bam_filehandle
 	get_fastq_read
+	$SAMTOOLS_APP
 );
 
 sub read_fastq_filehandle {
@@ -186,6 +187,7 @@ sub write_bam_filehandle {
 				# ugh, uncompressed sam file, really!!???
 				$outfile =~ s/\.bam$/.sam/;
 			}
+			return write_fastq_filehandle($outfile, $cpu);
 		}
 	}
 	

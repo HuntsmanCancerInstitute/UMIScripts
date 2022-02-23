@@ -19,6 +19,7 @@ use Bio::UMIScripts::FastqHelper qw(
 	write_fastq_filehandle
 	write_bam_filehandle
 	get_fastq_read
+	$SAMTOOLS_APP
 );
 use Bio::UMIScripts::UMIHelper qw(
 	umi_sam_tags_from_fastq_read
@@ -27,7 +28,7 @@ use Bio::UMIScripts::UMIHelper qw(
 	name_append_umi_from_fastq_read
 );
 
-my $VERSION = 3;
+my $VERSION = 3.01;
 
 ####### Documentation
 my $description =  <<END;
@@ -102,7 +103,7 @@ Options:
     -F --fixed2  <text>     Fixed sequence after UMI for read2 (optional, if different) 
   
   Other:
-    --samtools <path>       Path to samtools ($Bio::UMIScripts::FastqRead::SAMTOOLS_APP)
+    --samtools <path>       Path to samtools ($SAMTOOLS_APP)
     -h --help               Show full description and help
 
 END
@@ -138,7 +139,7 @@ GetOptions(
 	'F|fixed2=s'        => \$fixed2, # fixed portion of anchor sequence
 	'l|length=i'        => \$umi1_length, # length of the barcode
 	'L|length2=i'       => \$umi2_length, # length of the barcode
-	'samtools=s'        => \$Bio::UMIScripts::FastqRead::SAMTOOLS_APP, # samtools application
+	'samtools=s'        => \$SAMTOOLS_APP, # samtools application
 	'cpu=i'             => \$cpu, # number of CPU cores for compression
 	'h|help'            => \$help, # print help
 ) or die "unrecognized options!\n";
@@ -177,9 +178,9 @@ if ($umi_location == 2 or $umi_location == 12) {
 	$umi2_length ||= $umi1_length;
 	$fixed2 ||= $fixed1;
 }
-if ($sam_format and not $Bio::UMIScripts::FastqRead::SAMTOOLS_APP) {
+if ($sam_format and not $SAMTOOLS_APP) {
 	if ($outfile and $outfile =~ m/\.bam$/) {
-		$outfile =~ s/\bam$/sam.gz/;
+		$outfile =~ s/bam$/sam.gz/;
 		print STDERR "samtools application is not present. Writing to $outfile\n";
 	}
 }
