@@ -12,197 +12,351 @@
 # https://github.com/tjparnell/HCI-Scripts/
 
 use strict;
-use IO::File;
 use Getopt::Long qw(:config no_ignore_case);
 use File::Basename qw(fileparse);
-use String::Approx qw(aindex);
-use List::Util qw(min);
+use Bio::UMIScripts::FastqHelper qw(
+	read_fastq_filehandle
+	write_fastq_filehandle
+	write_bam_filehandle
+	get_fastq_read
+);
+use Bio::UMIScripts::UMIHelper qw(
+	umi_sam_tags_from_fastq_read
+	extract_umi_with_fixed_from_fastq
+	extract_umi_from_fastq
+	name_append_umi_from_fastq_read
+);
 
-my $VERSION = 2;
+my $VERSION = 3;
 
 ####### Documentation
-unless (@ARGV) {
-	print <<END;
+my $description =  <<END;
 
-A script to pull out Unique Molecular Index (UMI) barcodes embedded at 
-the beginning of the sequence read, as opposed to a seperate sequence read. 
-The UMI barcode may or may not be followed by a short fixed sequence. 
+A script to pull out an UMI embedded within a sequence read fastq file.
+ 
+Unique Molecular Indexes (UMIs) are short, random nucleotide sequences that can
+help to distinguish independent DNA molecules with the same sequence
+composition. By associating the UMI to a nucleotide molecule at the beginning of
+library preparation, identical sequence reads can be distinguished between
+unique, biologically-derived molecules and PCR-derived or sequencing artifact
+duplicates.
 
-The UMI code is appended to the read name in the format of ":UMI:NNNNN".
+UMIs are expected to be at the beginning of the sequence read. The UMI barcode 
+may or may not be followed by a short fixed sequence precdeding the sequence 
+read. Either single-end or paired-end fastq files may be processed. Paired-end 
+files may have an UMI in either one or both files. If a fixed sequence is provided, 
+it must be found for the read to be written to output; paired-end UMI containing 
+files must have both found.
 
-This script will work with single-end fastq files, paired-end fastq files
-where both have an independent UMI at the beginning, and paired-end fastq
-files where only one file has an UMI at the beginning. If the UMI is only
-included in read2 of a paired-end sequence, simply reverse the order and
-set read2 as the input with the UMI; for purposes of extracting the UMI
-only, the order is not absolutely required.
+UMIs can be merged into sequence read Fastq files in three ways:
 
-Fastq files are expected to be gzip compressed, and output files will be 
-gzip compressed.
+   1 Inserted as standard SAM attribute tags RX and QX in the read header.
+     This is compatible with e.g. BWA, Bowties2 aligners. DEFAULT.
 
-The sequence quality of the UMI is checked for a minimum acceptable base 
-quality. However, it is not retained in the read name. The presence of 
-any 'N' bases in the UMI are automatically considered a failure. Reads that 
-do not contain the given fixed sequence(s) are considered failed. If both 
-reads contain UMIs, then both both reads must pass in order to be written 
-to output. Failed reads are skipped entirely and not written to output. 
-Result counts are printed to standard output.
+   2 Exported as an unaligned SAM/BAM format with RX and QX attribute tags.
+     This is compatible with e.g. Bowtie2, STAR, BWA, and Novoalign.
+     Use the '--bam' option.
+
+   3 Appended to the read name as ":UMI_sequence". This is compatible with 
+     all aligners but requires special software to utilize. Non-standard. 
+     Use the '--name' option.
+
+Alignments can be de-duplicated utilizing the UMI codes with external software.
+See 'bam_umi_dedup.pl' in this software package, or 
+Picard 'UmiAwareMarkDuplicatesWithMateCigar' as possibilities.
+
+External utilities may be required for execution, inlcuding pigz and/or gzip, 
+and samtools. These are searched for in your environment PATH.
+
+END
+
+my $usage = <<END;
 
 Version: $VERSION
 
 Usage: 
 
-  embedded_UMI_barcode_tagger.pl --input file1.fastq.gz
+  embedded_UMI_extractor.pl -l 8 -f GTAGTA *.fastq.gz 
   
-  embedded_UMI_barcode_tagger.pl --input file1.fastq.gz --umipair file2.fastq.gz \\
-    --out file1.bc.fastq.gz --outpair file2.bc.fastq.gz
+  embedded_UMI_extractor.pl -1 file1.fastq.gz -2 file2.fastq.gz \\
+    --bam --out unaligned.bam --length 8 -f GTAGTA -F ACGACG 
 
 Options:
 
-  -i --input   <file>     Fastq file1 with UMI
-  -p --pair    <file>     Paired fastq file2 without UMI
-  -u --umipair <file>     Paired fastq file2 with UMI
-  -o --out     <file>     Output file1. Optional
-  -s --second  <file>     Output file2. Optional
-  -l --length  <integer>  Length of UMI at beginning of read1
-  -L --length2 <integer>  Length of UMI at beginning of read2 (if different)
-  -f --fixed   <text>     Optional fixed sequence after UMI and before insert 
-  -F --fixed2  <text>     Optional fixed sequence after UMI and before insert
-                            for read2 (if different)
-  -q --qual    <integer>  Minimum base quality for UMI sequence (default 20)
+  Input:
+    -1 --read1 <file>       First fastq read
+    -2 --read2 <file>       Second fastq read, optional
+    -u --umi <integer>      Read containing UMI: 1, 2, or 12 (default 1 or 12)
   
+  Output:
+    -o --out <file>         Path to output (input basename)
+                              use 'stdout' for (interleaved) piping
+    -b --bam                Write output as unaligned BAM format
+                              or SAM format if stdout or samtools unavailable 
+    -n --name               Append UMI to read name instead of SAM tag RX
+  
+  UMI Options:
+    -l --length  <integer>  Length of UMI at beginning of read1
+    -L --length2 <integer>  Length of UMI at beginning of read2 (if different)
+    -f --fixed   <text>     Fixed sequence after UMI for read1 (optional) 
+    -F --fixed2  <text>     Fixed sequence after UMI for read2 (optional, if different) 
+  
+  Other:
+    --samtools <path>       Path to samtools ($Bio::UMIScripts::FastqRead::SAMTOOLS_APP)
+    -h --help               Show full description and help
+
 END
-	exit;
-}
 
 
 #### Parameters
-my $infile; 
-my $inpair; 
-my $umipair;  
+my $read_file1;
+my $read_file2;
+my $umi_location;
 my $outfile; 
-my $outpair; 
-my $fixed1 = ''; 
-my $fixed2 = '';
+my $sam_format;
+my $append_name;
+my $fixed1 = q(); 
+my $fixed2 = q();
 my $umi1_length = 0;
 my $umi2_length = 0;
-my $min_basequal = 20;
+my $cpu = 3;
+my $help;
+
+unless (@ARGV) {
+	print $usage;
+	exit 0;
+}
 
 GetOptions( 
-	'input=s'           => \$infile, # input fastq file with umi
-	'pair=s'            => \$inpair, # input paired without umi
-	'umipair=s'         => \$umipair, # input paired with umi code
-	'out=s'             => \$outfile, # output fastq file 
-	'second=s'          => \$outpair, # output paired fastq file
+	'1|read1=s'         => \$read_file1, # first fastq file
+	'2|read2=s'         => \$read_file2, # second fastq file
+	'u|umi=i'           => \$umi_location, # umi_location
+	'o|out=s'           => \$outfile, # output fastq basename 
+	'b|bam!'            => \$sam_format, # bam output
+	'n|name'            => \$append_name, # add UMI to name
 	'f|fixed=s'         => \$fixed1, # fixed portion of anchor sequence
 	'F|fixed2=s'        => \$fixed2, # fixed portion of anchor sequence
 	'l|length=i'        => \$umi1_length, # length of the barcode
 	'L|length2=i'       => \$umi2_length, # length of the barcode
-	'q|qual=i'          => \$min_basequal, # minimum base quality for UMI seq
+	'samtools=s'        => \$Bio::UMIScripts::FastqRead::SAMTOOLS_APP, # samtools application
+	'cpu=i'             => \$cpu, # number of CPU cores for compression
+	'h|help'            => \$help, # print help
 ) or die "unrecognized options!\n";
 
+
+if ($help) {
+	print $description;
+	print $usage;
+	exit 0;
+}
 
 
 
 
 
 #### Check parameters
-unless ($infile) {
-	die "must provide an input file!\n";
+unless ($read_file1) {
+	if (@ARGV) {
+		$read_file1 = shift @ARGV;
+		$read_file2 = shift @ARGV || undef;
+	}
+	else {
+		die "must provide at least one input file!\n";
+	}
 }
 unless ($umi1_length > 0) {
 	die "must provide a length for the UMI barcode!\n";
 }
+unless ($umi_location) {
+	$umi_location = $read_file2 ? 12 : 1;
+}
+unless ($umi_location == 1 or $umi_location == 2 or $umi_location == 12) {
+	die "unrecognized UMI location of $umi_location! Must 1, 2, or 12\n";
+}
+if ($umi_location == 2 or $umi_location == 12) {
+	$umi2_length ||= $umi1_length;
+	$fixed2 ||= $fixed1;
+}
+if ($sam_format and not $Bio::UMIScripts::FastqRead::SAMTOOLS_APP) {
+	if ($outfile and $outfile =~ m/\.bam$/) {
+		$outfile =~ s/\bam$/sam.gz/;
+		print STDERR "samtools application is not present. Writing to $outfile\n";
+	}
+}
 
-
-
-
-
-#### Prepare the search callbacks
-
-# prepare the umi barcode search callback routine for read1
-# we're using substr and index instead of regex to speed things up just a little
-my $fix1_length = length($fixed1);
-my $barCode1_length = $umi1_length + $fix1_length;
-my $search1_callback;
-if ($fixed1) {
-	$search1_callback = sub {
-		my ($seq, $qual) = @_;
-		if (substr($seq, $umi1_length, $fix1_length) eq $fixed1) {
-			# we have the correct fixed code
-			# pull the UMI sequence
-			my $u = substr($seq, 0, $umi1_length);
-			my $q = substr($qual, 0, $umi1_length);
-			return check_quality($u, $q);
-		}
-		
-		# not found, try an imperfect match, allowing only 1 mismatch or deletion
-		my $fix_i = aindex($fixed1, [1, 'D1', 'S1', 'I0'], $seq);
-		if ($fix_i > 0 and abs(($umi1_length - 1) - $fix_i) <= 2) {
-			# we found it and it's within the expected position
-			# need to compensate that the umi1_length is essentially a 1-based position
-			# but index is returned as 0-based index, plus tolerate a possible deletion
-			my $u = substr($seq, 0, $fix_i);
-			my $q = substr($qual, 0, $fix_i);
-			return check_quality($u, $q);
-		}
-		
-		# still not found
-		return;
-	};
+# callback for extracting UMI
+my $extract_umi;
+if ($fixed1 or $fixed2) {
+	# using a fixed sequence between UMI and read
+	$extract_umi = \&extract_umi_with_fixed_from_fastq;
 }
 else {
-	$search1_callback = sub {
-		my ($seq, $qual) = @_;
-		my $u = substr($seq, 0, $umi1_length);
-		my $q = substr($qual, 0, $umi1_length);
-		return check_quality($u, $q);
-	};
+	# no fixed sequence
+	$extract_umi = \&extract_umi_from_fastq;
 }
 
-# prepare the umi callback for read2 as necessary
-my ($search2_callback, $fix2_length, $barCode2_length, $umi2_length);
-if ($umipair) {
-	# defaults are the same as read1
-	$fixed2 ||= $fixed1;
-	$umi2_length ||= $umi1_length;
-	
-	# calculate new lengths
-	$fix2_length = length($fixed2);
-	$barCode2_length = $umi2_length + $fix2_length;
-	if ($fixed2) {
-		$search2_callback = sub {
-			my ($seq, $qual) = @_;
-			if (substr($seq, $umi2_length, $fix2_length) eq $fixed2) {
-				# we have the correct fixed code
-				# pull the UMI sequence
-				my $u = substr($seq, 0, $umi2_length);
-				my $q = substr($qual, 0, $umi2_length);
-				return check_quality($u, $q);
-			}
-		
-			# not found, try an imperfect match, allowing only 1 mismatch or deletion
-			my $fix_i = aindex($fixed2, [1, 'D1', 'S1', 'I0'], $seq);
-			if ($fix_i > 0 and abs(($umi2_length - 1) - $fix_i) <= 2) {
-				# we found it and it's within the expected position
-				# need to compensate that the umi1_length is essentially a 1-based position
-				# but index is returned as 0-based index, plus tolerate a possible deletion
-				my $u = substr($seq, 0, $fix_i);
-				my $q = substr($qual, 0, $fix_i);
-				return check_quality($u, $q);
-			}
-		
-			# still not found
-			return;
-		};
+
+
+
+### Open input filehandles
+my ($in_fh1, $in_fh2);
+$in_fh1 = read_fastq_filehandle($read_file1);
+if ($read_file2) {
+	$in_fh2 = read_fastq_filehandle($read_file2);
+}
+
+
+
+
+
+### Open output filehandles
+my ($out_fh1, $out_fh2);
+
+if (not $outfile) {
+	if ($read_file2 and not $sam_format) {
+		# open two separate output handles
+		$outfile = $read_file1;
+		$outfile =~ s/\.(txt|fq|fastq)/.umi.$1/;
+		$out_fh1 = write_fastq_filehandle($outfile, $cpu);
+		my $outfile2 = $read_file2;
+		$outfile2 =~ s/\.(txt|fq|fastq)/.umi.$1/;
+		$out_fh2 = write_fastq_filehandle($outfile2, $cpu);
+	}
+	elsif (not $read_file2 and not $sam_format) {
+		# just one file output
+		$outfile = $read_file1;
+		$outfile =~ s/\.(txt|fq|fastq)/.umi.$1/;
+		$out_fh1 = write_fastq_filehandle($outfile, $cpu);
+	}
+	elsif ($read_file2 and $sam_format) {
+		# open one bam output handle for both
+		$outfile = $read_file1;
+		$outfile =~ s/\.(?:txt|fq|fastq)(?:\.gz)?$/.bam/;
+		$out_fh1 = write_bam_filehandle($outfile, $cpu);
+		$out_fh2 = $out_fh2;
+	}
+	elsif (not $read_file2 and $sam_format) {
+		# just one file output
+		$outfile = $read_file1;
+		$outfile =~ s/\.(?:fq|fastq)(?:\.gz)?$/.bam/;
+		$out_fh1 = write_bam_filehandle($outfile, $cpu);
 	}
 	else {
-		$search2_callback = sub {
-			my ($seq, $qual) = @_;
-			my $u = substr($seq, 0, $umi2_length);
-			my $q = substr($qual, 0, $umi2_length);
-			return check_quality($u, $q);
-		};
+		die "programming error:\n outfile $outfile\n sam format $sam_format\n first file $read_file1\n second file $read_file2\n";
+	}
+}
+elsif ($outfile and lc($outfile) eq 'stdout') {
+	$out_fh1 = write_fastq_filehandle($outfile); # this can handle stdout too
+	if ($read_file2) {
+		# reuse the same output 
+		$out_fh2 = $out_fh1;
+	}
+}
+elsif ($outfile and $sam_format) {
+	unless ($outfile =~ /\.bam$/) {
+		$outfile .= '.bam';
+	}
+	$out_fh1 = write_bam_filehandle($outfile, $cpu);
+	if ($read_file2) {
+		# reuse the same output 
+		$out_fh2 = $out_fh1;
+	}
+}
+elsif ($outfile and not $sam_format) {
+	# writing fastq text file output for both files
+	# use given out file as a base and make up extension
+	my $outfile1 = $outfile . '.1.fastq.gz';
+	$out_fh1 = write_fastq_filehandle($outfile1, $cpu);
+	if ($read_file2) {
+		my $outfile2 = $outfile . '.2.fastq.gz';
+		$out_fh2 = write_fastq_filehandle($outfile2, $cpu);
+	}
+}
+else {
+	die "programming error:\n outfile $outfile\n sam format $sam_format\n first file $read_file1\n second file $read_file2\n";
+}
+
+
+### Write sam header as necessary
+if ($sam_format) {
+	my $cl = "$0 --read1 $read_file1 ";
+	$cl .= "--read2  $read_file2 " if $read_file2;
+	$cl .= "--out $outfile " if $outfile;
+	$cl .= "--umi $umi_location ";
+	$cl .= "--fixed $fixed1 " if $fixed1;
+	$cl .= "--fixed2 $fixed2 " if $fixed2;
+	$cl .= "--length $umi1_length " if $umi1_length;
+	$cl .= "--length2 $umi2_length " if $umi2_length;
+	$cl .= "--bam " if $sam_format;
+	$cl .= "--name " if $append_name;
+	$out_fh1->print("\@PG\tID:embedded_UMI_extractor\tVN:$VERSION\tCL:$cl\n");
+}
+
+# define SAM flags
+	# 0x4d	77	PAIRED,UNMAP,MUNMAP,READ1
+	# 0x8d	141	PAIRED,UNMAP,MUNMAP,READ2
+	# 0x4   4   UNMAP 
+my $flag1 = $read_file2 ? 77 : 4; 
+my $flag2 = 141;
+
+
+
+
+
+
+####### Process file based on inputs
+
+# initialize global counters
+my $goodCount = 0;
+my $badCount  = 0;
+my $singleCount = 0;
+
+if ($read_file1 and not $read_file2) {
+	# One Fastq only
+	print STDERR "processing $read_file1....\n";
+	if ($sam_format) {
+		# write SAM file
+		process_single_end_sam();
+	}
+	elsif ($append_name) {
+		# append UMI to read name and write Fastq
+		process_single_end_name_append();
+	}
+	else {
+		# put SAM tags in Fastq comment
+		process_single_end_fastq_tag();
+	}
+}
+elsif ($read_file1 and $read_file2 and $umi_location != 12) {
+	# Paired Fastq, first is barcoded only
+	print STDERR "processing $read_file1 for UMIs with $read_file2 ....\n";
+	if ($sam_format) {
+		# write SAM file
+		process_paired_end_with_one_umi_sam();
+	}
+	elsif ($append_name) {
+		# append UMI to read name and write Fastq
+		process_paired_end_with_one_umi_name_append();
+	}
+	else {
+		# put SAM tags in Fastq comment
+		process_paired_end_with_one_umi_fastq_tag();
+	}
+}
+elsif ($read_file1 and $read_file2 and $umi_location == 12) {
+	# Paired Fastq, both are barcoded
+	print STDERR "processing both $read_file1 and $read_file2 for UMIs....\n";
+	if ($sam_format) {
+		# write SAM file
+		process_paired_end_with_two_umi_sam();
+	}
+	elsif ($append_name) {
+		# append UMI to read name and write Fastq
+		process_paired_end_with_two_umi_name_append();
+	}
+	else {
+		# put SAM tags in Fastq comment
+		process_paired_end_with_two_umi_fastq_tag();
 	}
 }
 
@@ -210,257 +364,282 @@ if ($umipair) {
 
 
 
+#### Finish
 
-####### Process file based on number of inputs
+# close filehandles
+$in_fh1->close;
+$in_fh2->close if $in_fh2;
+$out_fh1->close;
+$out_fh2->close if $out_fh2;
 
-# One Fastq only
-if ($infile and not $inpair and not $umipair) {
-	print "processing $infile....\n";
-	my $goodCount = 0;
-	my $badCount  = 0;
-	
-	# open input file
-	if ($infile !~ /\.gz$/i) {
-		die "why is $infile not gzip compressed!!!!\n";
-	}
-	my $infh = IO::File->new("gzip -dc $infile |") or 
-		die "unable to open $infile! $!";
-	
-	# check output file name
-	unless ($outfile) {
-		my ($basename, $path, $extension) = fileparse($infile, qw(.txt.gz .fastq.gz .fq.gz));
-		$outfile = $path . $basename . '.bc' . $extension;
-	}
-	my $outfh = IO::File->new("| gzip -c > $outfile") or 
-		die "unable to open $outfile! $!";
-	
-	while (my $header = $infh->getline) {
-		chomp $header; 
-		# we only chomp the header, we can safely skip the others
-		my $sequence = $infh->getline or die "malformed $infile file! no sequence line";
-		my $spacer = $infh->getline or die "malformed $infile file! no spacer line";
-		my $quality = $infh->getline or die "malformed $infile file! no quality line";
+# print status
+my $total = $goodCount + $badCount + $singleCount;
+if ($singleCount) {
+	printf STDERR " %12s read pairs total\n %12s read pairs had a bar code and were processed (%.2f%%)\n %12s read pairs had one failed bar code (%.2f%%)\n %12s read pairs had no bar code in either read (%.2f%%)\n", 
+		$total, $goodCount, ($goodCount/$total) * 100, $singleCount, 
+		($singleCount/$total) * 100, $badCount, ($badCount/$total) * 100;
+}
+else {
+	printf STDERR " %12s reads total\n %12s reads had a bar code and were processed (%.2f%%)\n %12s reads had no bar code (%.2f%%)\n", 
+		$total, $goodCount, ($goodCount/$total) * 100, $badCount, ($badCount/$total) * 100;
+}
+
+exit 0;
+
+
+
+
+
+
+
+
+############ Subroutines
+
+sub process_single_end_sam {
+	# iterate
+	while (my $read = get_fastq_read($in_fh1)) {
 		
-		# check for bar code sequence
-		my $umi = &$search1_callback($sequence, $quality);
+		# extract UMI sequence
+		my $umi = &$extract_umi($read, $umi1_length, $fixed1);
 		if ($umi) {
-			my ($name, $desc) = split /\s+/, $header;
-			$name .= ":UMI:$umi";
-			$header = $name . ' ' . $desc;
-			$sequence = substr($sequence, $barCode1_length);
-			$quality = substr($quality, $barCode1_length);
-			$outfh->print("$header\n$sequence$spacer$quality");
+			my $tag = umi_sam_tags_from_fastq_read($umi);
+			$out_fh1->print( $read->sam_string($flag1, $tag) );
 			$goodCount++;
 		}
 		else {
 			$badCount++;
 		}
 	}
-	
-	# close and finish
-	$infh->close;
-	$outfh->close;
-	my $total = $goodCount + $badCount;
-	printf " %12s reads total\n %12s reads had a bar code and were processed (%.2f%%)\n %12s reads had no bar code (%.2f%%)\n", 
-		$total, $goodCount, ($goodCount/$total) * 100, $badCount, ($badCount/$total) * 100;
-	print " wrote $outfile\n";
 }
 
-# Paired Fastq, first is barcoded only
-elsif ($infile and $inpair and not $umipair) {
-	print "processing $infile for UMIs with $inpair ....\n";
-	my $goodCount = 0;
-	my $badCount  = 0;
-	
-	# open input file
-	if ($infile !~ /\.gz$/i) {
-		die "why is $infile not gzip compressed!!!!\n";
-	}
-	if ($inpair !~ /\.gz$/i) {
-		die "why is $inpair not gzip compressed!!!!\n";
-	}
-	my $infh1 = IO::File->new("gzip -dc $infile |") or 
-		die "unable to open $infile! $!";
-	my $infh2 = IO::File->new("gzip -dc $inpair |") or 
-		die "unable to open $inpair! $!";
-	
-	# check output file name
-	unless ($outfile) {
-		my ($basename, $path, $extension) = fileparse($infile, qw(.txt.gz .fastq.gz .fq.gz));
-		$outfile = $path . $basename . '.bc' . $extension;
-	}
-	unless ($outpair) {
-		my ($basename, $path, $extension) = fileparse($inpair, qw(.txt.gz .fastq.gz .fq.gz));
-		$outpair = $path . $basename . '.bc' . $extension;
-	}
-	
-	# open output file handles
-	my $outfh1 = IO::File->new("| gzip -c > $outfile") or 
-		die "unable to open $outfile! $!";
-	my $outfh2 = IO::File->new("| gzip -c > $outpair") or 
-		die "unable to open $outpair! $!";
-	
-	while (my $header1 = $infh1->getline) {
-		chomp $header1; 
-		# we only chomp the header, we can safely skip the others
-		my $sequence1 = $infh1->getline or die "malformed $infile file! no sequence line";
-		my $spacer1 = $infh1->getline or die "malformed $infile file! no spacer line";
-		my $quality1 = $infh1->getline or die "malformed $infile file! no quality line";
+sub process_single_end_name_append {
+	# iterate
+	while (my $read = get_fastq_read($in_fh1)) {
 		
-		# second file
-		my $header2 = $infh2->getline or die "malformed $inpair file! no sequence line";
-		my $sequence2 = $infh2->getline or die "malformed $inpair file! no sequence line";
-		my $spacer2 = $infh2->getline or die "malformed $inpair file! no spacer line";
-		my $quality2 = $infh2->getline or die "malformed $inpair file! no quality line";
-		chomp $header2;
-		
-		# check for bar code sequence
-		my $umi = &$search1_callback($sequence1, $quality1);
+		# extract UMI sequence
+		my $umi = &$extract_umi($read, $umi1_length, $fixed1);
 		if ($umi) {
-			my $random = $1 or die "nothing captured!"; # grabbed from the barcode regex
-			
-			# first file
-			my ($name, $desc) = split /\s+/, $header1;
-			$name .= ":UMI:$umi";
-			$header1 = $name . ' ' . $desc;
-			$sequence1 = substr($sequence1, $barCode1_length);
-			$quality1 = substr($quality1, $barCode1_length);
-			$outfh1->print("$header1\n$sequence1$spacer1$quality1");
-			
-			# second file
-			($name, $desc) = split /\s+/, $header2;
-			$name .= ":UMI:$umi";
-			$header2 = $name . ' ' . $desc;
-			$sequence2 = substr($sequence2, $barCode1_length);
-			$quality2 = substr($quality2, $barCode1_length);
-			$outfh2->print("$header2\n$sequence2$spacer2$quality2");
-			
+			name_append_umi_from_fastq_read($read, $umi);
+			$out_fh1->print( $read->fastq_string );
 			$goodCount++;
 		}
 		else {
 			$badCount++;
 		}
 	}
-	
-	# close and finish
-	$infh1->close;
-	$infh2->close;
-	$outfh1->close;
-	$outfh2->close;
-	my $total = $goodCount + $badCount;
-	printf " %12s read pairs total\n %12s read pairs had a bar code and were processed (%.2f%%)\n %12s read pairs had no bar code (%.2f%%)\n", 
-		$total, $goodCount, ($goodCount/$total) * 100, $badCount, ($badCount/$total) * 100;
-	print " wrote $outfile and $outpair\n";
 }
 
-# Paired Fastq, both are barcoded
-elsif ($infile and not $inpair and $umipair) {
-	print "processing both $infile and $umipair for UMIs....\n";
-	my $goodCount   = 0;
-	my $badCount    = 0;
-	my $singleCount = 0;
-	
-	# open input file
-	if ($infile !~ /\.gz$/i) {
-		die "why is $infile not gzip compressed!!!!\n";
-	}
-	if ($umipair !~ /\.gz$/i) {
-		die "why is $umipair not gzip compressed!!!!\n";
-	}
-	my $infh1 = IO::File->new("gzip -dc $infile |") or 
-		die "unable to open $infile! $!";
-	my $infh2 = IO::File->new("gzip -dc $umipair |") or 
-		die "unable to open $umipair! $!";
-	
-	# check output file name
-	unless ($outfile) {
-		my ($basename, $path, $extension) = fileparse($infile, qw(.txt.gz .fastq.gz .fq.gz));
-		$outfile = $path . $basename . '.bc' . $extension;
-	}
-	unless ($outpair) {
-		my ($basename, $path, $extension) = fileparse($umipair, qw(.txt.gz .fastq.gz .fq.gz));
-		$outpair = $path . $basename . '.bc' . $extension;
-	}
-	
-	# open output file handles
-	my $outfh1 = IO::File->new("| gzip -c > $outfile") or 
-		die "unable to open $outfile! $!";
-	my $outfh2 = IO::File->new("| gzip -c > $outpair") or 
-		die "unable to open $outpair! $!";
-	
-	while (my $header1 = $infh1->getline) {
-		chomp $header1; 
-		# we only chomp the header, we can safely skip the others
-		my $sequence1 = $infh1->getline or die "malformed $infile file! no sequence line";
-		my $spacer1 = $infh1->getline or die "malformed $infile file! no spacer line";
-		my $quality1 = $infh1->getline or die "malformed $infile file! no quality line";
+sub process_single_end_fastq_tag {
+	# iterate
+	while (my $read = get_fastq_read($in_fh1)) {
 		
-		# second file
-		my $header2 = $infh2->getline or die "malformed $umipair file! no sequence line";
-		my $sequence2 = $infh2->getline or die "malformed $umipair file! no sequence line";
-		my $spacer2 = $infh2->getline or die "malformed $umipair file! no spacer line";
-		my $quality2 = $infh2->getline or die "malformed $umipair file! no quality line";
-		chomp $header2;
-		
-		# check for bar code sequence
-		my $umi1 = &$search1_callback($sequence1, $quality1);
-		my $umi2 = &$search2_callback($sequence2, $quality2);
+		# extract UMI sequence
+		my $umi = &$extract_umi($read, $umi1_length, $fixed1);
+		if ($umi) {
+			my $tag = umi_sam_tags_from_fastq_read($umi);
+			$out_fh1->print( $read->fastq_string($tag) );
+			$goodCount++;
+		}
+		else {
+			$badCount++;
+		}
+	}
+}
 
-		# entire barcode
+sub process_paired_end_with_one_umi_sam {
+	# iterate
+	while (my $read1 = get_fastq_read($in_fh1)) {
+		
+		# second read
+		my $read2 = get_fastq_read($in_fh2) or 
+			die "premature end of file for $read_file2!";
+		unless ($read1->compare_names($read2)) {
+			printf STDERR " Mismatching read names!\n   Compare read1 %s with read2 %s\n",
+				$read1->name, $read2->name;
+			die "mismatched files!";
+		}
+		
+		# extract UMI sequence
+		my $umi = &$extract_umi($umi_location == 1 ? $read1 : $read2, 
+			$umi1_length, $fixed1);
+		if ($umi) {
+			my $tag = umi_sam_tags_from_fastq_read($umi);
+			$out_fh1->print( $read1->sam_string($flag1, $tag) );
+			$out_fh2->print( $read2->sam_string($flag2, $tag) );
+			$goodCount++;
+		}
+		else {
+			$badCount++;
+		}
+	}
+}
+
+sub process_paired_end_with_one_umi_name_append {
+	# iterate
+	while (my $read1 = get_fastq_read($in_fh1)) {
+		
+		# second read
+		my $read2 = get_fastq_read($in_fh2) or 
+			die "premature end of file for $read_file2!";
+		unless ($read1->compare_names($read2)) {
+			printf STDERR " Mismatching read names!\n   Compare read1 %s with read2 %s\n",
+				$read1->name, $read2->name;
+			die "mismatched files!";
+		}
+		
+		# extract UMI sequence
+		my $umi = &$extract_umi($umi_location == 1 ? $read1 : $read2, 
+			$umi1_length, $fixed1);
+		if ($umi) {
+			name_append_umi_from_fastq_read($read1, $umi);
+			name_append_umi_from_fastq_read($read2, $umi);
+			$out_fh1->print( $read1->fastq_string );
+			$out_fh2->print( $read2->fastq_string );
+			$goodCount++;
+		}
+		else {
+			$badCount++;
+		}
+	}
+}
+
+sub process_paired_end_with_one_umi_fastq_tag {
+	# iterate
+	while (my $read1 = get_fastq_read($in_fh1)) {
+		
+		# second read
+		my $read2 = get_fastq_read($in_fh2) or 
+			die "premature end of file for $read_file2!";
+		unless ($read1->compare_names($read2)) {
+			printf STDERR " Mismatching read names!\n   Compare read1 %s with read2 %s\n",
+				$read1->name, $read2->name;
+			die "mismatched files!";
+		}
+		
+		# extract UMI sequence
+		my $umi = &$extract_umi($umi_location == 1 ? $read1 : $read2, 
+			$umi1_length, $fixed1);
+		if ($umi) {
+			my $tag = umi_sam_tags_from_fastq_read($umi);
+			$out_fh1->print( $read1->fastq_string($tag) );
+			$out_fh2->print( $read2->fastq_string($tag) );
+			$goodCount++;
+		}
+		else {
+			$badCount++;
+		}
+	}
+}
+
+
+
+sub process_paired_end_with_two_umi_sam {
+	# iterate
+	while (my $read1 = get_fastq_read($in_fh1)) {
+		
+		# second read
+		my $read2 = get_fastq_read($in_fh2) or 
+			die "premature end of file for $read_file2!";
+		unless ($read1->compare_names($read2)) {
+			printf STDERR " Mismatching read names!\n   Compare read1 %s with read2 %s\n",
+				$read1->name, $read2->name;
+			die "mismatched files!";
+		}
+		
+		# extract UMI sequence
+		my $umi1 = &$extract_umi($read1, $umi1_length, $fixed1);
+		my $umi2 = &$extract_umi($read2, $umi2_length, $fixed2);
 		if ($umi1 and $umi2) {
-			my $umi = $umi1 . $umi2;
-		
-			# first file
-			my ($name, $desc) = split /\s+/, $header1;
-			$name .= ":UMI:$umi";
-			$header1 = $name . ' ' . $desc;
-			$sequence1 = substr($sequence1, $barCode1_length);
-			$quality1 = substr($quality1, $barCode1_length);
-			$outfh1->print("$header1\n$sequence1$spacer1$quality1");
-			
-			# second file
-			($name, $desc) = split /\s+/, $header2;
-			$name .= ":UMI:$umi";
-			$header2 = $name . ' ' . $desc;
-			$sequence2 = substr($sequence2, $barCode2_length);
-			$quality2 = substr($quality2, $barCode2_length);
-			$outfh2->print("$header2\n$sequence2$spacer2$quality2");
-			
+			# both found, both good
+			my $umi = $umi1->concatenate_reads($umi2);
+			my $tag = umi_sam_tags_from_fastq_read($umi);
+			$out_fh1->print( $read1->sam_string($flag1, $tag) );
+			$out_fh2->print( $read2->sam_string($flag2, $tag) );
 			$goodCount++;
 		}
 		elsif ($umi1 or $umi2) {
-			# only one read had a good UMI sequence
+			# only one found
 			$singleCount++;
 		}
 		else {
-			# neither had a good UMI sequence
+			# none found
 			$badCount++;
 		}
 	}
-	
-	# close and finish
-	$infh1->close;
-	$infh2->close;
-	$outfh1->close;
-	$outfh2->close;
-	my $total = $goodCount + $singleCount + $badCount;
-	printf " %12s read pairs total\n %12s read pairs had a bar code and were processed (%.2f%%)\n %12s read pairs had one failed bar code (%.2f%%)\n %12s read pairs had no bar code in either read (%.2f%%)\n", 
-		$total, $goodCount, ($goodCount/$total) * 100, $singleCount, 
-		($singleCount/$total) * 100, $badCount, ($badCount/$total) * 100;
-	print " wrote $outfile and $outpair\n";
 }
 
-
-sub check_quality {
-	my ($seq, $qual) = @_;
-	if (index($seq,'N') == -1) {
-		# good sequence, no N's
-		my @quals = map {ord($_) - 33} split q(), $qual;
-		if (min(@quals) >= $min_basequal) {
-			# good quality
-			return $seq;
+sub process_paired_end_with_two_umi_name_append {
+	# iterate
+	while (my $read1 = get_fastq_read($in_fh1)) {
+		
+		# second read
+		my $read2 = get_fastq_read($in_fh2) or 
+			die "premature end of file for $read_file2!";
+		unless ($read1->compare_names($read2)) {
+			printf STDERR " Mismatching read names!\n   Compare read1 %s with read2 %s\n",
+				$read1->name, $read2->name;
+			die "mismatched files!";
+		}
+		
+		# extract UMI sequence
+		my $umi1 = &$extract_umi($read1, $umi1_length, $fixed1);
+		my $umi2 = &$extract_umi($read2, $umi2_length, $fixed2);
+		if ($umi1 and $umi2) {
+			# both found, both good
+			my $umi = $umi1->concatenate_reads($umi2);
+			name_append_umi_from_fastq_read($read1, $umi);
+			name_append_umi_from_fastq_read($read2, $umi);
+			$out_fh1->print( $read1->fastq_string );
+			$out_fh2->print( $read2->fastq_string );
+			$goodCount++;
+		}
+		elsif ($umi1 or $umi2) {
+			# only one found
+			$singleCount++;
+		}
+		else {
+			# none found
+			$badCount++;
 		}
 	}
-	return; # otherwise return nothing indicating a bad sequence
 }
+
+sub process_paired_end_with_two_umi_fastq_tag {
+	# iterate
+	while (my $read1 = get_fastq_read($in_fh1)) {
+		
+		# second read
+		my $read2 = get_fastq_read($in_fh2) or 
+			die "premature end of file for $read_file2!";
+		unless ($read1->compare_names($read2)) {
+			printf STDERR " Mismatching read names!\n   Compare read1 %s with read2 %s\n",
+				$read1->name, $read2->name;
+			die "mismatched files!";
+		}
+		
+		# extract UMI sequence
+		my $umi1 = &$extract_umi($read1, $umi1_length, $fixed1);
+		my $umi2 = &$extract_umi($read2, $umi2_length, $fixed2);
+		if ($umi1 and $umi2) {
+			# both found, both good
+			my $umi = $umi1->concatenate_reads($umi2);
+			my $tag = umi_sam_tags_from_fastq_read($umi);
+			$out_fh1->print( $read1->fastq_string($tag) );
+			$out_fh2->print( $read2->fastq_string($tag) );
+			$goodCount++;
+		}
+		elsif ($umi1 or $umi2) {
+			# only one found
+			$singleCount++;
+		}
+		else {
+			# none found
+			$badCount++;
+		}
+	}
+}
+
+
+
+
 
