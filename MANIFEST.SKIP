@@ -79,5 +79,7 @@
 # Avoid deprecated scripts
 \bdeprecated$
 
+# Avoid caches
+\b\.pls_cache
 
 

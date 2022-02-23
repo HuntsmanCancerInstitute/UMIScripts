@@ -1,8 +1,19 @@
+lib/Bio/UMIScripts.pm
+lib/Bio/UMIScripts/UMIHelper.pm
+lib/Bio/UMIScripts/FastqHelper.pm
+lib/Bio/UMIScripts/FastqRead.pm
+lib/Bio/UMIScripts/FastqConstant.pm
 bin/bam_umi_dedup.pl
 bin/embedded_UMI_extractor.pl
 bin/merge_umi_fastq.pl
 bin/qiagen_smallRNA_umi_extractor.pl
 bin/smallRNA_pe_umi_extractor.pl
+t/01.FastqHelper.t
+t/02.Scripts.t
+t/data/example_R3.fastq
+t/data/example_R1.fastq
+t/data/example_R4.fastq
+t/data/example_R2.fastq
 Build.PL
 LICENSE
 MANIFEST			This list of files
