@@ -297,7 +297,7 @@ if ($sam_format) {
 	# 0x4d	77	PAIRED,UNMAP,MUNMAP,READ1
 	# 0x8d	141	PAIRED,UNMAP,MUNMAP,READ2
 	# 0x4   4   UNMAP 
-my $flag1 = $read_file2 ? 77 : 4; 
+my $flag1 = $read_file2 ? 77 : 4;
 my $flag2 = 141;
 
 
@@ -376,12 +376,12 @@ $out_fh2->close if $out_fh2;
 # print status
 my $total = $goodCount + $badCount + $singleCount;
 if ($singleCount) {
-	printf STDERR " %12s read pairs total\n %12s read pairs had a bar code and were processed (%.2f%%)\n %12s read pairs had one failed bar code (%.2f%%)\n %12s read pairs had no bar code in either read (%.2f%%)\n", 
-		$total, $goodCount, ($goodCount/$total) * 100, $singleCount, 
+	printf STDERR " %12s read pairs total\n %12s read pairs had a bar code and were processed (%.2f%%)\n %12s read pairs had one failed bar code (%.2f%%)\n %12s read pairs had no bar code in either read (%.2f%%)\n",
+		$total, $goodCount, ($goodCount/$total) * 100, $singleCount,
 		($singleCount/$total) * 100, $badCount, ($badCount/$total) * 100;
 }
 else {
-	printf STDERR " %12s reads total\n %12s reads had a bar code and were processed (%.2f%%)\n %12s reads had no bar code (%.2f%%)\n", 
+	printf STDERR " %12s reads total\n %12s reads had a bar code and were processed (%.2f%%)\n %12s reads had no bar code (%.2f%%)\n",
 		$total, $goodCount, ($goodCount/$total) * 100, $badCount, ($badCount/$total) * 100;
 }
 
@@ -452,7 +452,7 @@ sub process_paired_end_with_one_umi_sam {
 	while (my $read1 = get_fastq_read($in_fh1)) {
 		
 		# second read
-		my $read2 = get_fastq_read($in_fh2) or 
+		my $read2 = get_fastq_read($in_fh2) or
 			die "premature end of file for $read_file2!";
 		unless ($read1->compare_names($read2)) {
 			printf STDERR " Mismatching read names!\n   Compare read1 %s with read2 %s\n",
@@ -461,7 +461,7 @@ sub process_paired_end_with_one_umi_sam {
 		}
 		
 		# extract UMI sequence
-		my $umi = &$extract_umi($umi_location == 1 ? $read1 : $read2, 
+		my $umi = &$extract_umi($umi_location == 1 ? $read1 : $read2,
 			$umi1_length, $fixed1);
 		if ($umi) {
 			my $tag = umi_sam_tags_from_fastq_read($umi);
@@ -480,7 +480,7 @@ sub process_paired_end_with_one_umi_name_append {
 	while (my $read1 = get_fastq_read($in_fh1)) {
 		
 		# second read
-		my $read2 = get_fastq_read($in_fh2) or 
+		my $read2 = get_fastq_read($in_fh2) or
 			die "premature end of file for $read_file2!";
 		unless ($read1->compare_names($read2)) {
 			printf STDERR " Mismatching read names!\n   Compare read1 %s with read2 %s\n",
@@ -518,7 +518,7 @@ sub process_paired_end_with_one_umi_fastq_tag {
 		}
 		
 		# extract UMI sequence
-		my $umi = &$extract_umi($umi_location == 1 ? $read1 : $read2, 
+		my $umi = &$extract_umi($umi_location == 1 ? $read1 : $read2,
 			$umi1_length, $fixed1);
 		if ($umi) {
 			my $tag = umi_sam_tags_from_fastq_read($umi);
@@ -610,7 +610,7 @@ sub process_paired_end_with_two_umi_fastq_tag {
 	while (my $read1 = get_fastq_read($in_fh1)) {
 		
 		# second read
-		my $read2 = get_fastq_read($in_fh2) or 
+		my $read2 = get_fastq_read($in_fh2) or
 			die "premature end of file for $read_file2!";
 		unless ($read1->compare_names($read2)) {
 			printf STDERR " Mismatching read names!\n   Compare read1 %s with read2 %s\n",

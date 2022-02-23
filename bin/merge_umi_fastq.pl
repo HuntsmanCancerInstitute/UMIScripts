@@ -120,7 +120,7 @@ unless (@ARGV) {
 }
 
 # get command line options
-GetOptions( 
+GetOptions(
 	'1|read1=s'         => \$read_file1, # first fastq file
 	'2|read2=s'         => \$read_file2, # second fastq file
 	'u|umi1=s'          => \$umi_file1, # first umi fastq file
@@ -315,7 +315,7 @@ if ($sam_format) {
 	# 0x4d	77	PAIRED,UNMAP,MUNMAP,READ1
 	# 0x8d	141	PAIRED,UNMAP,MUNMAP,READ2
 	# 0x4   4   UNMAP 
-my $flag1 = $read_file2 ? 77 : 4; 
+my $flag1 = $read_file2 ? 77 : 4;
 my $flag2 = 141;
 
 
@@ -362,7 +362,7 @@ else {
 $read_fh1->close;
 $read_fh2->close if $read_fh2;
 $umi_fh1->close;
-$umi_fh2->close if $umi_fh2; 
+$umi_fh2->close if $umi_fh2;
 $out_fh1->close;
 $out_fh2->close if $out_fh2;
 
@@ -385,12 +385,12 @@ printf STDERR " $count reads were processed in %.1f minutes\n", (time - $start_t
 
 sub read_two_umi_fastq {
 	my $check = shift;
-	my $umi1 = get_fastq_read($umi_fh1) or 
+	my $umi1 = get_fastq_read($umi_fh1) or
 		die "premature end of file for $umi_file1!";
-	my $umi2 = get_fastq_read($umi_fh2) or 
+	my $umi2 = get_fastq_read($umi_fh2) or
 		die "premature end of file for $umi_file2!";
 	if (
-		$check->compare_names($umi1) and 
+		$check->compare_names($umi1) and
 		$check->compare_names($umi2)
 	) {
 		# names match, let's merge the two
