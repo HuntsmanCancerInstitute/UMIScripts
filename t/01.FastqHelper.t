@@ -30,10 +30,10 @@ is(QUAL, 4, 'Quality index');
 
 
 ### Example Fastq files
-my $fastq1 = File::Spec->catfile($Bin, "Data", "example_R1.fastq"); # 100 bp read 1
-my $fastq2 = File::Spec->catfile($Bin, "Data", "example_R2.fastq"); # 100 bp read 2
-my $fastq3 = File::Spec->catfile($Bin, "Data", "example_R3.fastq"); # matching UMI read
-my $fastq4 = File::Spec->catfile($Bin, "Data", "example_R4.fastq"); # different UMI read
+my $fastq1 = File::Spec->catfile($Bin, "data", "example_R1.fastq"); # 100 bp read 1
+my $fastq2 = File::Spec->catfile($Bin, "data", "example_R2.fastq"); # 100 bp read 2
+my $fastq3 = File::Spec->catfile($Bin, "data", "example_R3.fastq"); # matching UMI read
+my $fastq4 = File::Spec->catfile($Bin, "data", "example_R4.fastq"); # different UMI read
 
 
 
