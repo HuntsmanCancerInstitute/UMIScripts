@@ -135,6 +135,11 @@ GetOptions(
 ) or die "bad options!\n";
 
 
+if ($help) {
+	print $description;
+	print $usage;
+	exit 0;
+}
 
 
 
