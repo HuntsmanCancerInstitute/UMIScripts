@@ -76,10 +76,27 @@ The application can process 1 million paired-end reads in about 15-20 seconds. 
 
 When the UMI is embedded inline to the read, it must be extracted. It may be in the
 first read, second read, or both. The `embedded_UMI_extractor.pl` application can do
-this. Currently, it only appends the UMI to the read name. The
-length of the UMI sequence, and the fixed sequence (if any) should be given.
+this. It assumes that the UMI sequence is at the 5' end of the read, separated by a 
+fixed sequence. For example,
 
-    embedded_UMI_extractor.pl --input R1.fastq.gz --pair R2.fastq.gz --length 12 --fixed GATC
+    NNNNNNNNNNNNGATCxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+where `N` is the UMI sequence, `GATC` is the fixed sequence, and `xxx` represents the 
+sequence read. An example command, with UMI length of 12 and fixed sequence of `GATC`,
+would then be
+
+    embedded_UMI_extractor.pl --read1 R1.fastq.gz --length 12 --fixed GATC
+
+Paired-end reads can also be handled. The UMI by default is assumed to be on both reads,
+otherwise it can be specified using the `--umi` option with values `1`, `2`, or `12`
+(for both). 
+
+    embedded_UMI_extractor.pl --read1 R1.fastq.gz --read2 R2.fastq.gz --umi 12 --length 12 --fixed GATC
+
+By default, SAM tags are generated in the Fastq comment. Alternatively, they can be 
+appended to the name using the `--name` flag, or an unaligned bam file can be written 
+using the `--bam` option. 
+
 
 # Aligners
 
