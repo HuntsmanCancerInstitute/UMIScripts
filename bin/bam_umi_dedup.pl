@@ -118,9 +118,9 @@ DISCLAIMER: Alignments are de-duplicated solely on alignment coordinates
 and the UMI sequences of the alignments at the current position, as well as
 properly paired mate pairs. No guarantees are made for maintaining the same
 molecule between secondary, supplementary (chimeric), and mate pair
-alignments on separate chromosomes. A unique Molecule Identifier (tag MI)
-is not calculated. These results may be sufficient for most applications,
-but not all.
+alignments on separate chromosomes. These results may be sufficient for most 
+applications, but not all. Additionally, Bam files may fail subsequent 
+verification checks because of this. 
 
 END
 
