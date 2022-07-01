@@ -36,7 +36,9 @@ some cases can be piped out to downstream applications (adapter trimming or alig
     A simple script for extracting the UMI barcode from the beginning of the read. 
     A fixed sequence may or may not be present between the UMI and the sequenced 
     insert. Both single-end and paired-end (with or without a second UMI in the 
-    second read) fastq files are supported. The UMI is appended to the read name.
+    second read) fastq files are supported. The UMI may added as SAM tags to the 
+    Fastq read header, appended to the read name, or written out as an unaligned 
+    Sam or Bam file.
 
 - `merge_umi_fastq.pl`
 
