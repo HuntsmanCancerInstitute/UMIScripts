@@ -1,5 +1,5 @@
 package Bio::UMIScripts;
-our $VERSION = 5.01;
+our $VERSION = '5.10';
 
 =head1 Bio::UMIScripts - Modules to support UMIScripts
 
