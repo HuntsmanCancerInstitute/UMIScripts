@@ -20,9 +20,7 @@ my $build = Module::Build->new(
 		'Module::Build'           => 0,
 	},
 	requires          => {
-		'Bio::ToolBox'                  => 1.60,
-		'Parallel::ForkManager'         => 0,
-		'Bio::DB::HTS'                  => 0,
+		'List::Util'                    => 0,
 		'String::Approx'                => 0,
 		'Text::Levenshtein::Flexible'   => 0,
 	},
@@ -31,6 +29,9 @@ my $build = Module::Build->new(
 		'Test::Script'                  => 0
 	},
 	recommends        => {
+		'Bio::DB::HTS'                  => 0,
+		'Parallel::ForkManager'         => 0,
+		'List::MoreUtils'               => 0,
 	},
 );
 
