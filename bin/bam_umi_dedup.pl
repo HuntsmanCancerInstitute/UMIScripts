@@ -9,28 +9,23 @@
 # it under the terms of the Artistic License 2.0.  
 # 
 # Updated versions of this file may be found in the repository
-# https://github.com/tjparnell/HCI-Scripts/
+# https://github.com/HuntsmanCancerInstitute/UMIScripts
 
 use strict;
+use English qw(-no_match_vars);
 use Getopt::Long;
 use File::Which;
 use IO::File;
 use List::Util qw(sum min max);
 use List::MoreUtils qw(bsearch_remove);
+use Bio::DB::HTS;
 use Parallel::ForkManager;
 use Text::Levenshtein::Flexible;
 	# this Levenshtein module is preferred over others available specifically 
 	# because we can weight insertions, deletions, and substitutions and
 	# we only want substitutions to be considered for UMI codes
-use Bio::ToolBox::db_helper 1.50 qw(
-	open_db_connection 
-	low_level_bam_fetch
-	$BAM_ADAPTER
-);
-# this can import either Bio::DB::Sam or Bio::DB::HTS depending on availability
-# this script is mostly bam adapter agnostic
 
-my $VERSION = 2.2;
+our $VERSION = 2.3;
 # version 1.0 - initial version
 # version 1.1 - added option to write the duplicates to second bam file
 # version 1.2 - add marking and parallel processing, make compatible with 
@@ -48,6 +43,8 @@ my $VERSION = 2.2;
 # version 2.0 - deduplicate ALL alignments, support for SAM tags, tolerate mismatches
 # version 2.1 - change default to SAM tag instead of read name
 # version 2.2 - bug fix, improve optical detection
+# version 2.3 - add explicit support for cram, remove Bio::ToolBox dependency,
+#               fix untagged paired-end counting
 
 #### Inputs
 my $infile;
@@ -60,6 +57,7 @@ my $opt_distance = 0;
 my $skip_mismatch_depth = 5000;
 my $name_coordinates;
 my $cpu = 4;
+my $fasta;
 my $no_sam;
 my $paired;
 my $keep_secondary = 0;
@@ -109,17 +107,20 @@ pixel distance threshold for marking as duplicates. Tile coordinates must
 be present in the alignment read name. Optical duplicates are not 
 distinguished from UMI duplicates when marking. 
 
-Bam files must be sorted by coordinate. Bam files may be indexed as
-necessary. Unmapped (flag 0x4) alignments are silently discarded. Read
-groups (tag RG) are ignored; de-duplication should be done with only one
-read group per Bam file.
+Alignment files must be sorted by coordinate and indexed. Unmapped
+(flag 0x4) alignments are silently discarded. Read groups (tag RG) are
+ignored; de-duplication should be done with only one read group per
+alignment file.
+
+Both Bam and Cram file formats are supported as input and output files.
+Cram files require an indexed reference file.
 
 DISCLAIMER: Alignments are de-duplicated solely on alignment coordinates
 and the UMI sequences of the alignments at the current position, as well as
 properly paired mate pairs. No guarantees are made for maintaining the same
 molecule between secondary, supplementary (chimeric), and mate pair
 alignments on separate chromosomes. These results may be sufficient for most 
-applications, but not all. Additionally, Bam files may fail subsequent 
+applications, but not all. Additionally, alignments may fail subsequent 
 verification checks because of this. 
 
 END
@@ -144,6 +145,7 @@ OPTIONS:
     --skip <int>          Skip mismatch detection if depth exceeds ($skip_mismatch_depth)
 
   Other options:
+    -f --fasta <file>     Provide fasta file for Cram files
     -d --distance <int>   Set optical duplicate distance threshold.
                             Use 100 for unpatterned flowcell (HiSeq) or 
                             2500 for patterned flowcell (NovaSeq). Default 0.
@@ -169,6 +171,7 @@ GetOptions(
 	'm|mark!'       => \$markdups, # set duplicate flag instead of removing
 	't|tolerance=i' => \$edit_tolerance, # number mismatches allowed
 	'indel=i'       => \$indel_score, # weight for indel scoring in calculating distance
+	'f|fasta=s'     => \$fasta, # fasta reference
 	'd|distance=i'  => \$opt_distance, # optical pixel distance
 	'coord=s'       => \$name_coordinates, # tile:X:Y name positions
 	'skip=i'        => \$skip_mismatch_depth, # maximum allowed depth for umi mismatch 
@@ -176,7 +179,6 @@ GetOptions(
 	'p|pe!'         => \$paired, # legacy flag for paired-end alignments
 	's|secondary!'  => \$keep_secondary, # legacy flag to keep secondary alignments 
 	'samtools=s'    => \$sam_app, # path to samtools
-	'bam=s'         => \$BAM_ADAPTER, # specifically set the bam adapter, advanced!
 	'nosam!'        => \$no_sam, # avoid using external sam adapter, advanced!
 	'h|help!'       => \$help, # print help
 ) or die " Unrecognized option(s)!! please refer to the help documentation\n\n";
@@ -186,21 +188,35 @@ if ($help) {
 	print $usage;
 	exit 0;
 }
-unless ($infile) {
-	die " Must provide an input file name!\n";
+unless ($infile =~ / \. (?: b | cr ) am $/x) {
+	print " Must provide an input file name in .bam or .cram format!\n";
+	exit 1;
 }
 unless ($outfile) {
-	die " Must provide an output file name!\n";
+	print " Must provide an output file name!\n";
+	exit 1;
 }
-unless ($outfile =~ /\.bam$/) {
+if ($outfile =~ /\.bam$/) {
+	# this is ok
+}
+elsif ($outfile =~ /\.cram$/) {
+	unless ($fasta) {
+		print " Must provide an indexed fasta reference file for output cram file!\n";
+		exit 1;
+	}
+	# otherwise ok
+}
+else {
+	# default is to write a bam file
 	$outfile .= '.bam';
 }
 undef $sam_app if $no_sam;
 my $sam_version;
 if ($sam_app) {
 	my $sam_help = qx($sam_app 2>&1);
-	if ($sam_help =~ /Version: 1\.(\d+) /) {
+	if ($sam_help =~ /Version: \s 1 \. (\d+) /x) {
 		$sam_version = $1;
+		printf "   using samtools version 1.%d\n", $sam_version;
 	}
 	else {
 		print " Unrecognized samtools version! Disabling\n";
@@ -208,7 +224,7 @@ if ($sam_app) {
 	}
 }
 if ($name_coordinates) {
-	if ($name_coordinates =~ /(\d):(\d):(\d)/) {
+	if ($name_coordinates =~ /(\d) : (\d) : (\d)/x) {
 		# coordinates must be converted to 0-based indices
 		$tilepos = $1 - 1;
 		$xpos = $2 - 1;
@@ -245,43 +261,30 @@ else {
 
 ### Open bam files
 # input bam file
-my $sam = open_db_connection($infile) or # automatically takes care of indexing
-	die "unable to read bam $infile $!";
-
-# read header and set adapter specific alignment writer
-my ($header, $write_alignment);
-if ($BAM_ADAPTER eq 'sam') {
-	$header = $sam->bam->header;
-	$write_alignment = \&write_sam_alignment;
-}
-elsif ($BAM_ADAPTER eq 'hts') {
-	$header = $sam->hts_file->header_read;
-	$write_alignment = \&write_hts_alignment;
-}
-else {
-	die "unrecognized bam adapter $BAM_ADAPTER!";
-}
+my $sam = open_hts_connection($infile) or # automatically takes care of indexing
+	die "unable to read bam $infile $OS_ERROR";
 
 # update headers
-my $htext = $header->text;
+my $header = $sam->hts_file->header_read;
+my $htext  = $header->text;
 {
 	my $pp;
-	foreach my $line (split "\n", $htext) {
+	foreach my $line (split /\n/, $htext) {
 		# assume the last observed program should become the previous program ID
-		if (substr($line,0,3) eq '@PG' and $line =~ /ID:([\w\.\-]+)/) {
+		if (substr($line,0,3) eq '@PG' and $line =~ /ID : ( [\w\.\-]+ )/x) {
 			$pp =$1;
 		}
 	}
-	$htext .= "\@PG\tID:bam_umi_dedup\t";
-	$htext .= "PP:$pp\t" if $pp;
-	$htext .= sprintf("VN:%s\tCL:%s", $VERSION, $0);
-	$htext .= " --in $infile --out $outfile --tag $umi_location";
-	$htext .= " --mark" if $markdups;
-	$htext .= " --tolerance $edit_tolerance --indel $indel_score";
-	$htext .= " --distance $opt_distance" if $opt_distance;
-	$htext .= " --coord $name_coordinates" if $name_coordinates and $opt_distance;
-	$htext .= " --samtools $sam_app" if $sam_app;
-	$htext .= " --bam $BAM_ADAPTER\n";
+	my $pg  = "\@PG\tID:bam_umi_dedup\t";
+	$pg    .= "PP:$pp\t" if $pp;
+	$pg    .= sprintf "VN:%s\tCL:%s", $VERSION, $PROGRAM_NAME;
+	$pg    .= sprintf " --in %s --out %s --tag %s", $infile, $outfile, $umi_location;
+	$pg    .= '--mark' if $markdups;
+	$pg    .= sprintf " --tolerance %s --indel %s", $edit_tolerance, $indel_score;
+	$pg    .= " --distance $opt_distance" if $opt_distance;
+	$pg    .= " --coord $name_coordinates" if ( $name_coordinates and $opt_distance );
+	$pg    .= " --samtools $sam_app" if $sam_app;
+	$htext .= $pg;
 }
 
 
@@ -360,6 +363,7 @@ if ($untagCount) {
 		($untagCount/($totalSingleCount + $totalPairedCount)) * 100;
 }
 
+print " Any unmapped alignments were discarded\n".
 printf "\n Wrote $outfile in %.1f minutes \n", (time - $start_time) / 60;
 #### End
 
@@ -377,6 +381,47 @@ printf "\n Wrote $outfile in %.1f minutes \n", (time - $start_time) / 60;
 
 ######## Subroutines ###########
 
+sub open_hts_connection {
+
+	# check for possible index names
+	my $ok = 0;
+	if ( $infile =~ /\.bam$/ ) {
+		$ok++ if -e "$infile.bai";   # .bam.bai
+		$ok++ if -e "$infile.csi";   # .bam.csi
+		unless ($ok) {
+			print " ERROR! Alignment file must be sorted by coordinate and indexed!\n";
+			print " No .bam.bai,  or .bam.csi file was found\n";
+			exit 1;
+		}
+	}
+	else {
+		$ok++ if -e "$infile.crai";  # .cram.crai
+		$ok++ if -e "$infile.csi";   # .cram.csi
+		unless ($ok) {
+			print " ERROR! Alignment file must be sorted by coordinate and indexed!\n";
+			print " No .cram.crai, or .cram.csi file was found\n";
+			exit 1;
+		}
+	}
+	# open the file
+	my $db;
+	if ($fasta) {
+		$db = Bio::DB::HTS->new(
+			-bam   => $infile,
+			-fasta => $fasta
+		);
+	}
+	else {
+		$db = Bio::DB::HTS->new( -bam   => $infile );
+	}
+	if ($db) {
+		return $db;
+	}
+	else {
+		print " ERROR! Cannot open $infile\n";
+		exit 1;
+	}
+}
 
 sub deduplicate_multithread {
 	
@@ -407,10 +452,11 @@ sub deduplicate_multithread {
 	});
 	
 	# prepare targets and names
+	# we always write intermediate chromosome bam files as they are faster
 	my @targets = (0 .. $sam->n_targets - 1);
 	my $tempfile = $outfile;
 	$tempfile =~ s/\.bam$//i;
-	my @targetfiles = map {$tempfile . ".$$.$_.bam"} @targets;
+	my @targetfiles = map {$tempfile . ".$PID.$_.bam"} @targets;
 	
 	# walk through the file in parallel, one fork per chromosome
 	for my $tid (@targets) {
@@ -420,17 +466,12 @@ sub deduplicate_multithread {
 		
 		# Clone Bam object
 		$sam->clone;
-		if ($BAM_ADAPTER eq 'sam') {
-			$header = $sam->bam->header;
-		}
-		elsif ($BAM_ADAPTER eq 'hts') {
-			$header = $sam->hts_file->header_read;
-		}
+		$header = $sam->hts_file->header_read;
 		
 		# prepare a temporary bam file
 		my $tf = $targetfiles[$tid];
-		my $tempbam = Bio::ToolBox::db_helper::write_new_bam_file($tf) or 
-			die "unable to open output bam file $tf! $!";
+		my $tempbam = Bio::DB::HTSfile->open( $tf, 'wb' ) or 
+			die "unable to open output bam file $tf! $OS_ERROR";
 		$tempbam->header_write($header);
 		
 		# prepare distance calculator
@@ -440,7 +481,7 @@ sub deduplicate_multithread {
 			# set weights: max_edit, cost_insertion, cost_deletion, cost_substitution
 			$Levenshtein = Text::Levenshtein::Flexible->new(
 				$edit_tolerance, $indel_score, $indel_score, 1) or 
-				die "unable to initiate Text::Levenshtein::Flexible object! $!";
+				die "unable to initiate Text::Levenshtein::Flexible object! $OS_ERROR";
 		}
 		
 		# prepare callback data structure
@@ -460,6 +501,7 @@ sub deduplicate_multithread {
 			single_reads        => [],
 			paired_reads        => [],
 			keepers             => {},
+			untag_keepers       => {},
 			duplicates          => {},
 			opt_duplicates      => {},
 			calculator          => $Levenshtein
@@ -467,7 +509,8 @@ sub deduplicate_multithread {
 	
 		# walk through the reads on the chromosome
 		my $seq_length = $sam->target_len($tid);
-		low_level_bam_fetch($sam, $tid, 0, $seq_length, \&callback, $data);
+		my $index = $sam->hts_index;
+		$index->fetch( $sam->hts_file, $tid, 0, $seq_length, \&callback, $data );
 	
 		# check to make sure we don't leave something behind
 		if (defined $data->{single_reads}->[0]) {
@@ -525,7 +568,7 @@ sub deduplicate_multithread {
 		if ($sam_version >= 10) {
 			$command .= sprintf "--no-PG --threads %s ", $cpu;
 		}
-		$command .= join(' ', @targetfiles);
+		$command .= join q( ), @targetfiles;
 		print " executing '$sam_app cat' to merge children...\n";
 		if (system($command)) {
 			die "something went wrong with command '$command'!\n";
@@ -535,40 +578,32 @@ sub deduplicate_multithread {
 	}
 	
 	# otherwise we do this the old fashioned slow way
-	# open final bam new bam file
-	$outbam = Bio::ToolBox::db_helper::write_new_bam_file($outfile) or 
-		die "unable to open output bam file $outfile! $!";
-	# we can't write updated text to the header - otherwise it crashes
-	# $header->text($htext);
-	$outbam->header_write($header);
+	# open final output alignment file and write all the alignments
+	# this is dependent on output format: bam or cram
+	# HUGE Fail!!!! Unable to write the new header text here
+	# major flaw to the Bio::DB::HTS adapter
+	print
+" Writing $outfile using Bio::DB::HTS adapter.\n This does not include an updated header\n";
+	if ($outfile =~ /\.cram$/) {
+		$outbam = Bio::DB::HTSfile->open( $outfile, 'wc' ) or 
+			die "unable to open output cram file $outfile! $OS_ERROR";
+		$outbam->header_write($header, $fasta);
+	}
+	else {
+		$outbam = Bio::DB::HTSfile->open( $outfile, 'wb' ) or 
+			die "unable to open output bam file $outfile! $OS_ERROR";
+		$outbam->header_write($header);
+	}
 
 	# now remerge all the child files and write to main bam file
-	if ($BAM_ADAPTER eq 'sam') {
-		# open the low level bam file
-		# avoid the usual high level bam file opening because that will force an 
-		# automatic index, which we don't want or need
-		# We will read the alignments as is. It should already be sorted and in order.
-		# Must read the header first!
-		for my $tf (@targetfiles) {
-			my $inbam = Bio::DB::Bam->open($tf) or die "unable to open $tf!\n";
-			my $h = $inbam->header;
-			while (my $a = $inbam->read1) {
-				&$write_alignment($outbam, $a);
-			}
-			undef $inbam;
-			unlink $tf;
-		} 
-	}	
-	elsif ($BAM_ADAPTER eq 'hts') {
-		for my $tf (@targetfiles) {
-			my $inbam = Bio::DB::HTSfile->open($tf) or die "unable to open $tf!\n";
-			my $h = $inbam->header_read;
-			while (my $a = $inbam->read1($h)) { 
-				&$write_alignment($outbam, $a);
-			}
-			undef $inbam;
-			unlink $tf;
+	for my $tf (@targetfiles) {
+		my $inbam = Bio::DB::HTSfile->open($tf) or die "unable to open $tf!\n";
+		my $h = $inbam->header_read;
+		while ( my $a = $inbam->read1($h) ) { 
+			$outbam->write1($header, $a);
 		}
+		undef $inbam;
+		unlink $tf;
 	}
 	
 	# finished
@@ -676,10 +711,10 @@ sub write_se_reads_on_strand {
 	# put the reads into a hash based on tag identifer
 	my %tag2reads;
 	my @untagged;
-	while (my $a = shift @$reads) {
+	while (my $a = shift @{$reads}) {
 	
 		# collect UMI
-		my $tag = &$get_umi($a);
+		my $tag = &{$get_umi}($a);
 		if (defined $tag) {
 			$tag2reads{$tag} ||= [];
 			push @{ $tag2reads{$tag} }, $a;
@@ -698,7 +733,7 @@ sub write_se_reads_on_strand {
 	foreach my $tag (keys %tag2reads) {
 		if (scalar @{ $tag2reads{$tag} } == 1) {
 			# good, only 1 read, we can write it
-			&$write_alignment($data->{outbam}, $tag2reads{$tag}->[0] );
+			$data->{outbam}->( $header, $tag2reads{$tag}->[0] );
 			$data->{uniqueSingleCount}++; # accepted read 
 		}
 		else {
@@ -709,7 +744,7 @@ sub write_se_reads_on_strand {
 			if ($opt_distance) {
 				($nonopt_reads, $optdup_reads, $error) = 
 					identify_optical_duplicates($tag2reads{$tag});
-				$data->{opticalSingleCount} += scalar @$optdup_reads;
+				$data->{opticalSingleCount} += scalar @{$optdup_reads};
 				$data->{coordErrorCount} += $error;
 			}
 			else {
@@ -724,10 +759,10 @@ sub write_se_reads_on_strand {
 				map {$_->[0]} 
 				sort { ($a->[1] <=> $b->[1]) or ($a->[2] <=> $b->[2]) } 
 				map { [$_, $_->qual, sum($_->qscore)] } 
-				@$nonopt_reads;
+				@{$nonopt_reads};
 		
 			# write the best one
-			&$write_alignment($data->{outbam}, shift @sorted );
+			$data->{outbam}->( $header, shift @sorted );
 		
 			# update counters
 			$data->{uniqueSingleCount}++; # accepted read 
@@ -737,15 +772,15 @@ sub write_se_reads_on_strand {
 			if ($markdups) {
 				foreach my $a (@sorted) {
 					mark_alignment($a);
-					&$write_alignment($data->{outbam}, $a);
+					$data->{outbam}->write1($header, $a);
 				}
 			}
 			
 			# write remaining optical duplicate reads
-			if ($markdups and scalar @$optdup_reads) {
-				foreach my $a (@$optdup_reads) {
+			if ($markdups and scalar @{$optdup_reads}) {
+				foreach my $a (@{$optdup_reads}) {
 					mark_alignment($a);
-					&$write_alignment($data->{outbam}, $a);
+					$data->{outbam}->write1($header, $a);
 				}
 			}
 		}
@@ -755,7 +790,7 @@ sub write_se_reads_on_strand {
 	if (@untagged) {
 		$data->{untagCount} += scalar(@untagged);
 		foreach my $a (@untagged) {
-			&$write_alignment($data->{outbam}, $a);
+			$data->{outbam}->write1($header, $a);
 		}
 	}
 }
@@ -800,11 +835,11 @@ sub write_pe_reads_on_strand {
 	# then extract the UMI tag for sorting
 	my %tag2reads; # barcode-to-alignment hash
 	my @untagged;
-	while (my $a = shift @$reads) {
+	while (my $a = shift @{$reads}) {
 		my $name = $a->qname;
 		if (exists $data->{keepers}{$name}) {
 			# the pair was a unique keeper
-			&$write_alignment($data->{outbam}, $a);
+			$data->{outbam}->write1($header, $a);
 			delete $data->{keepers}{$name};
 			$data->{uniquePairedCount}++; 
 		}
@@ -812,7 +847,7 @@ sub write_pe_reads_on_strand {
 			# pair was a duplicate
 			if ($markdups) {
 				mark_alignment($a);
-				&$write_alignment($data->{outbam}, $a);
+				$data->{outbam}->write1($header, $a);
 			}
 			delete $data->{duplicates}{$name};
 			$data->{dupPairedCount}++; 
@@ -821,15 +856,21 @@ sub write_pe_reads_on_strand {
 			# pair was an optical duplicate
 			if ($markdups) {
 				mark_alignment($a);
-				&$write_alignment($data->{outbam}, $a);
+				$data->{outbam}->write1($header, $a);
 			}
 			delete $data->{opt_duplicates}{$name};
 			$data->{opticalPairedCount}++; 
 		}
+		elsif (exists $data->{untag_keepers}{$name}) {
+			# the pair was an untagged keeper
+			$data->{outbam}->write1($header, $a);
+			delete $data->{untag_keepers}{$name};
+			$data->{untagCount}++;
+		}
 		else {
 			# pair hasn't been seen before
 			# collect the UMI code
-			my $tag = &$get_umi($a);
+			my $tag = &{$get_umi}($a);
 			if (defined $tag) {
 				$tag2reads{$tag} ||= [];
 				push @{ $tag2reads{$tag} }, $a;
@@ -851,7 +892,7 @@ sub write_pe_reads_on_strand {
 			# only 1 alignment, excellent, write it
 			my $a = $tag2reads{$tag}->[0];
 			$data->{keepers}{ $a->qname } += 1;
-			&$write_alignment($data->{outbam}, $a);
+			$data->{outbam}->write1($header, $a);
 			$data->{uniquePairedCount}++;
 		}
 		else {
@@ -862,7 +903,7 @@ sub write_pe_reads_on_strand {
 			if ($opt_distance) {
 				($nonopt_reads, $optdup_reads, $error) = 
 					identify_optical_duplicates( $tag2reads{$tag} );
-				$data->{opticalPairedCount} += scalar @$optdup_reads;
+				$data->{opticalPairedCount} += scalar @{$optdup_reads};
 				$data->{coordErrorCount} += $error;
 			}
 			else {
@@ -879,12 +920,12 @@ sub write_pe_reads_on_strand {
 						$_, 
 						sum($_->qual, $_->aux_get('MQ') || 0),
 						sum($_->qscore, $_->aux_get('ms') || 0) 
-				] } @$nonopt_reads;
+				] } @{$nonopt_reads};
 			
 			# write the first one
 			my $best = shift @sorted;
 			$data->{keepers}{ $best->qname } += 1;
-			&$write_alignment($data->{outbam}, $best);
+			$data->{outbam}->write1($header, $best);
 			
 			# increment counters
 			$data->{uniquePairedCount}++;
@@ -896,7 +937,7 @@ sub write_pe_reads_on_strand {
 				foreach my $a (@sorted) {
 					$data->{duplicates}{$a->qname} += 1;
 					mark_alignment($a);
-					&$write_alignment($data->{outbam}, $a);
+					$data->{outbam}->write1($header, $a);
 				}
 			}
 			else {
@@ -906,15 +947,15 @@ sub write_pe_reads_on_strand {
 			}
 			
 			# write optical duplicate reads, and remember them so to write its pair
-			if ($markdups and scalar @$optdup_reads) {
-				foreach my $a (@$optdup_reads) {
+			if ($markdups and scalar @{$optdup_reads}) {
+				foreach my $a (@{$optdup_reads}) {
 					$data->{opt_duplicates}{$a->qname} += 1;
 					mark_alignment($a);
-					&$write_alignment($data->{outbam}, $a);
+					$data->{outbam}->write1($header, $a);
 				}
 			}
-			elsif (scalar @$optdup_reads) {
-				foreach my $a (@$optdup_reads) {
+			elsif (scalar @{$optdup_reads}) {
+				foreach my $a (@{$optdup_reads}) {
 					$data->{opt_duplicates}{$a->qname} += 1;
 				}
 			}
@@ -925,8 +966,8 @@ sub write_pe_reads_on_strand {
 	if (@untagged) {
 		$data->{untagCount} += scalar(@untagged);
 		foreach my $a (@untagged) {
-			$data->{keepers}{$a->qname} += 1; # remember to write pair
-			&$write_alignment($data->{outbam}, $a);
+			$data->{untag_keepers}{$a->qname} += 1; # remember to write pair
+			$data->{outbam}->write1($header, $a);
 		}
 	}
 }
@@ -936,7 +977,7 @@ sub identify_optical_duplicates {
 	my $alignments = $_[0];
 	
 	# check for only one alignment and quickly return
-	if (scalar @$alignments == 1) {
+	if (scalar @{$alignments} == 1) {
 		return ($alignments, []);
 	}
 	
@@ -945,8 +986,8 @@ sub identify_optical_duplicates {
 	my @dups;
 	my @nondups;
 	my $coord_error = 0;
-	foreach my $a (@$alignments) {
-		my @bits = split(':', $a->qname);
+	foreach my $a (@{$alignments}) {
+		my @bits = split(/:/, $a->qname);
 		if (
 			$#bits < $ypos or (
 				not defined $bits[$tilepos] and 
@@ -979,7 +1020,7 @@ sub identify_optical_duplicates {
 	# walk through each read-group tile
 	while (my ($rgtile, $rgtile_alnts) = each %tile2alignment) {
 		# check the number of alignments
-		if (scalar @$rgtile_alnts == 1) {
+		if (scalar @{$rgtile_alnts} == 1) {
 			# we only have one, so it's a nondup
 			push @nondups, $rgtile_alnts->[0][2];
 		}
@@ -987,7 +1028,7 @@ sub identify_optical_duplicates {
 			# we have more than one so must sort through
 			
 			# sort by increasing X coordinate
-			my @spots = sort {$a->[0] <=> $b->[0]} @$rgtile_alnts;
+			my @spots = sort {$a->[0] <=> $b->[0]} @{$rgtile_alnts};
 			# collect the deltas from one spot to the next on the X axis
 			# start with second sorted spot and subtract the one before it
 			my @xdiffs = map { $spots[$_]->[0] - $spots[$_-1]->[0] } (1..$#spots);
@@ -1095,7 +1136,7 @@ sub identify_optical_duplicates {
 
 sub get_umi_from_name {
 	# get UMI from read name
-	if ($_[0]->qname =~ /:([AGCTN]{4,25})([\+\-][AGCTN]{4,25})?/i) {
+	if ($_[0]->qname =~ /: ([AGCTN]{4,25}) ( [\+\-] [AGCTN]{4,25} )?/xi) {
 		if ($2) {
 			return $1 . $2;
 		}
@@ -1122,7 +1163,7 @@ sub collapse_umi_hash {
 	# but that's way too computationally intense for doing here, hence sorting is better 
 	# than nothing
 	# actually, unsorted gives variable results (!!!)
-	my @list = sort {$a cmp $b} keys %$tag2a;
+	my @list = sort {$a cmp $b} keys %{$tag2a};
 	
 	# check for extreme depth
 	if (scalar @list > $skip_mismatch_depth) {
@@ -1153,16 +1194,6 @@ sub collapse_umi_hash {
 		}
 	}
 	return 1;
-}
-
-sub write_sam_alignment {
-	# wrapper for writing Bio::DB::Sam alignments
-	return $_[0]->write1($_[1]);
-}
-
-sub write_hts_alignment {
-	# wrapper for writing Bio::DB::HTS alignments
-	return $_[0]->write1($header, $_[1]);
 }
 
 sub mark_alignment {
