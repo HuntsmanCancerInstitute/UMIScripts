@@ -1,4 +1,8 @@
-# Introduction
+# UMI Scripts - Usage
+
+|[Home](Readme.md)|[Install](Install.md)|[Usage](Usage.md)|[Applications](Applications.md)|
+
+## Introduction
 
 Universal Molecular Indexes, or UMIs, are for uniquely identifying the molecule from
 which a sequencing read is derived, and is primarily used to differentiate reads from
@@ -17,7 +21,7 @@ de-duplication, so it must be used in conjunction with the read sequence. This i
 best done after the alignment step, since the alignment coordinates can then be used
 in combination with the UMI to determine uniqueness. 
 
-# Preparing for alignment
+## Preparing for alignment
 
 Keeping the UMI during the alignment step is tricky. It can't be part of the primary
 read, since it won't align to the genome, so it has to be associated through the use
@@ -43,7 +47,7 @@ The method chosen is mostly dependent on the aligner software to be used, and to
 lesser extent, the de-duplication software used. 
 
 
-# UMIScripts tool example
+## UMIScripts tool example
 
 On local HCI Linux machines or using our CHPC module repository, you will need to
 load the module.
@@ -98,7 +102,7 @@ appended to the name using the `--name` flag, or an unaligned bam file can be wr
 using the `--bam` option. 
 
 
-# Aligners
+## Aligners
 
 The choice of aligner dictates the method used. Below are examples for the four
 common aligners used in the Core. 
@@ -182,7 +186,8 @@ To align an unaligned Bam file:
     samtools fixmate -m - output.bam
 
 
-# De-duplication of alignment files
+## De-duplication of alignment files
+
 Once you have alignment files, they may be de-duplicated. The Bam files must be
 sorted and indexed. Duplicates at any given coordinate are checked for the UMI and
 the best one is kept, while the remaining are marked or discarded. There are two
@@ -201,13 +206,23 @@ is painfully slow! It can only accommodate UMI sequences in a SAM attribute tag,
     -M marked_dup_metrics.txt -UMI_METRICS umi_metrics.txt \
     --OPTICAL_DUPLICATE_PIXEL_DISTANCE 2500 --UMI_TAG_NAME RX
 
-### UMIScripts
+### Samtools
 
-The included de-deduplication script is considerably faster, but with a **notable 
-caveat**: no guarantee is made for retaining identical molecules at secondary, 
-supplementary, and inter-chromosomal alignments (they are treated independently). 
-Otherwise, for normal alignments, results are comparable to Picard. For most 
-count-based applications such as ChIPSeq or RNASeq, this limitation may be acceptable.
+As of version 1.16 (released in 2022), [samtools](https://github.com/samtools/samtools)
+added the capability to use UMIs in the `markdup` function to mark (or remove)
+duplicates. It will extract the UMI sequence from a SAM attribute tag (`--barcode-tag`)
+or from the name (`--barcode-name`). No mismatches in the UMI are tolerated. 
+
+	samtools markdup --barcode-tag RX -d 2500 input.bam output.bam
+
+### bam\_umi\_dedup
+
+The included [bam_umi_dedup.pl](bam_umi_dedupapps/.md) application is considerably
+faster than Picard, but with a **notable caveat**: no guarantee is made for retaining
+identical molecules at secondary, supplementary, and inter-chromosomal alignments
+(they are treated independently). Otherwise, for normal alignments, results are
+comparable to Picard. For most count-based applications such as ChIPSeq or RNASeq,
+this limitation may be acceptable.
 
 By default, duplicates are discarded, or they can marked with the `--mark` option.
 Unmapped alignments are silently discarded. 
@@ -226,10 +241,11 @@ are tolerated. For `bam_umi_dedup`, a maximum depth is allowed for mismatch tole
 before mismatch checking is dropped to avoid extreme impact (runtime of days). Dropping
 mismatch tolerance completely will also improve runtime.
 
+### Performance
 
-For a human (hg38) WGS Bam file with 668M alignments, the Picard tool (version 2.26.3) 
-completes in 7.5 hours, while the UMIScripts tool completes in 48 minutes with 16 
-threads. Results may vary.
-
-
+For a human (hg38) WGS Bam file with 668 M alignments, the Picard tool (version 2.26.3) 
+completes in 7.5 hours, while the `bam_umi_dedup` tool completes in 48 minutes with 16 
+threads and one mismatch tolerated. The Samtools tool was not tested with this file, but 
+subsequent testing suggests it is comparable to the `bam_umi_dedup` but requiring fewer 
+threads, i.e. it's more performant. Results may vary.
 
