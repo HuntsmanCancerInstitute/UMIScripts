@@ -386,23 +386,27 @@ sub open_hts_connection {
 
 	# check for possible index names
 	my $ok = 0;
-	if ( $infile =~ /\.bam$/ ) {
+	if ( $infile =~ /\.bam$/i ) {
 		$ok++ if -e "$infile.bai";   # .bam.bai
 		$ok++ if -e "$infile.csi";   # .bam.csi
 		unless ($ok) {
 			print " ERROR! Alignment file must be sorted by coordinate and indexed!\n";
-			print " No .bam.bai,  or .bam.csi file was found\n";
+			print " No .bam.bai or .bam.csi file was found\n";
 			exit 1;
 		}
 	}
-	else {
+	elsif ( $infile =~ /\.cram$/i ) {
 		$ok++ if -e "$infile.crai";  # .cram.crai
 		$ok++ if -e "$infile.csi";   # .cram.csi
 		unless ($ok) {
 			print " ERROR! Alignment file must be sorted by coordinate and indexed!\n";
-			print " No .cram.crai, or .cram.csi file was found\n";
+			print " No .cram.crai or .cram.csi file was found\n";
 			exit 1;
 		}
+	}
+	else {
+		print " ERROR! Only .bam and .cram alignment input files are supported!\n";
+		exit 1;
 	}
 	# open the file
 	my $db;
