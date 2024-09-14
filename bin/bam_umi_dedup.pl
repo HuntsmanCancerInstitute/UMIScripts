@@ -458,6 +458,9 @@ sub deduplicate_multithread {
 	
 	# prepare targets and names
 	# we always write intermediate chromosome bam files as they are faster
+	# each reference sequence will be processed in a separate fork and have a 
+	# a separate temporary intermediate bam file, which are concatenated at the end
+	# this has a side effect of discarding unaligned reads
 	my @targets = (0 .. $sam->n_targets - 1);
 	my $tempfile = $outfile;
 	$tempfile =~ s/\.bam$//i;
@@ -556,17 +559,20 @@ sub deduplicate_multithread {
 	$pm->wait_all_children;
 
 	
+	# write a temporary sam header with updated text
+	my $samfile = $outfile;
+	$samfile =~ s/\.bam$/temp.sam/;
+	my $fh = IO::File->new($samfile, '>') or 
+		die "unable to write temporary sam file\n";
+	$fh->print($htext);
+	$fh->close;
 	
 	# attempt to use external samtools to merge the bam files
 	# this should be faster than going through Perl and bam adapters
-	if ($sam_app) {
-		# write a temporary sam header with updated text
-		my $samfile = $outfile;
-		$samfile =~ s/\.bam$/temp.sam/;
-		my $fh = IO::File->new($samfile, '>') or 
-			die "unable to write temporary sam file\n";
-		$fh->print($htext);
-		$fh->close;
+	# also avoid issues with too many file handles, since each chromosome/contig
+	# is a separate file
+	# this should accommodate most standard genomes
+	if ( $sam_app and scalar(@targetfiles) < 200 ) {
 		
 		# prepare a samtools concatenate command
 		my $command = sprintf "%s cat -h %s -o %s ", $sam_app, $samfile, $outfile;
@@ -574,30 +580,35 @@ sub deduplicate_multithread {
 			$command .= sprintf "--no-PG --threads %s ", $cpu;
 		}
 		$command .= join q( ), @targetfiles;
-		print " executing '$sam_app cat' to merge children...\n";
+		printf " merging %d children with 'samtools cat'...\n", scalar(@targetfiles);
 		if (system($command)) {
-			die "something went wrong with command '$command'!\n";
+			print " something went wrong with command '$command'!\n";
+			print " falling back to Bio::DB::HTS adapter\n";
 		}
-		unlink $samfile, @targetfiles;
-		return 1;
+		else {
+			unlink $samfile, @targetfiles;
+			return 1;
+		}
 	}
 	
 	# otherwise we do this the old fashioned slow way
 	# open final output alignment file and write all the alignments
 	# this is dependent on output format: bam or cram
-	# HUGE Fail!!!! Unable to write the new header text here
-	# major flaw to the Bio::DB::HTS adapter
-	print
-" Writing $outfile using Bio::DB::HTS adapter.\n This does not include an updated header\n";
+	print " merging %d children...\n", scalar(@targetfiles);
+
+	# workaround to get a new header object with the updated text
+	# ridiculous that I have to go through to disk to get this
+	my $example_hts = Bio::DB::HTSfile->open($samfile);
+	my $new_head    = $example_hts->header_read;
 	if ($outfile =~ /\.cram$/) {
 		$outbam = Bio::DB::HTSfile->open( $outfile, 'wc' ) or 
 			die "unable to open output cram file $outfile! $OS_ERROR";
-		$outbam->header_write($header, $fasta);
+		$outbam->header_write($new_head, $fasta);
 	}
 	else {
 		$outbam = Bio::DB::HTSfile->open( $outfile, 'wb' ) or 
 			die "unable to open output bam file $outfile! $OS_ERROR";
-		$outbam->header_write($header);
+		$outbam->header_write($new_head);
 	}
 
 	# now remerge all the child files and write to main bam file
@@ -605,14 +616,15 @@ sub deduplicate_multithread {
 		my $inbam = Bio::DB::HTSfile->open($tf) or die "unable to open $tf!\n";
 		my $h = $inbam->header_read;
 		while ( my $a = $inbam->read1($h) ) { 
-			$outbam->write1($header, $a);
+			$outbam->write1($new_head, $a);
 		}
 		undef $inbam;
 		unlink $tf;
 	}
+	unlink $samfile;
 	
 	# finished
-	return 1
+	return 1;
 }
 
 
