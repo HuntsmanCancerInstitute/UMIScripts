@@ -44,7 +44,7 @@ our $VERSION = 2.3;
 # version 2.1 - change default to SAM tag instead of read name
 # version 2.2 - bug fix, improve optical detection
 # version 2.3 - add explicit support for cram, remove Bio::ToolBox dependency,
-#               fix untagged paired-end counting
+#               fix untagged paired-end counting, fix missing header @PG
 
 #### Inputs
 my $infile;
@@ -132,29 +132,31 @@ VERSION: $VERSION
 USAGE:  bam_umi_dedup.pl --in in.bam --out out.bam
 
 OPTIONS:
-  Required:
-    -i --in <file>        The input bam file, should be sorted and indexed
-    -o --out <file>       The output bam file
+ Required:
+  -i --in <file>        The input bam file, should be sorted and indexed
+  -o --out <file>       The output bam file
   
-  UMI options:
-    -u --umi <string>     SAM tag name for UMI sequence. Default 'RX'
-                            Specify 'name' when UMI appended to read name.
-    -m --mark             Mark duplicates (flag 0x400) instead of discarding
-    -t --tolerance <int>  UMI sequence edit distance tolerance ($edit_tolerance)
-    --indel <int>         Set insertion/deletion penalty score ($indel_score)
-    --skip <int>          Skip mismatch detection if depth exceeds ($skip_mismatch_depth)
+ UMI options:
+  -u --umi <string>     SAM tag name for UMI sequence. Default 'RX'
+                          Specify 'name' when UMI appended to read name.
+  -m --mark             Mark duplicates (flag 0x400) instead of discarding
+  -t --tolerance <int>  UMI sequence edit distance tolerance ($edit_tolerance)
+     --indel <int>      Set insertion/deletion penalty score ($indel_score)
+     --skip <int>       Skip mismatch detection if depth exceeds ($skip_mismatch_depth)
 
-  Other options:
-    -f --fasta <file>     Provide fasta file for Cram files
-    -d --distance <int>   Set optical duplicate distance threshold.
-                            Use 100 for unpatterned flowcell (HiSeq) or 
-                            2500 for patterned flowcell (NovaSeq). Default 0.
-    --coord <string>      Provide the tile:X:Y integer 1-base positions in the 
-                            read name for optical checking. For Illumina CASAVA 1.8 
-                            7-element names, this is 5:6:7 (default)
-    -c --cpu <int>        Specify the number of forks to use ($cpu) 
-    --samtools <path>     Path to samtools ($sam_app)
-    -h --help             Display full description and help
+ Other options:
+  -f --fasta <file>     Provide indexed fasta file for Cram files
+  -d --distance <int>   Set optical duplicate distance threshold.
+                          Use 100 for unpatterned flowcell (HiSeq) or 
+                          2500 for patterned flowcell (NextSeq or NovaSeq6000)
+                          or 200 for NovaseqX. Default 0.
+     --coord <string>   Provide the tile:X:Y integer 1-base positions in the 
+                          read name for optical checking. For Illumina CASAVA 1.8 
+                          7-element names, this is 5:6:7 (default)
+  -c --cpu <int>        Specify the number of forks to use ($cpu) 
+     --samtools <path>  Path to samtools ($sam_app)
+     --nosam            Do not use samtools for final concatenation (slower)
+  -h --help             Display full description and help
 
 END
 
