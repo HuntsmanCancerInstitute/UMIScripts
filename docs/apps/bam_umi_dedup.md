@@ -78,20 +78,22 @@ UMI options:
                             Specify 'name' when UMI appended to read name.
     -m --mark             Mark duplicates (flag 0x400) instead of discarding
     -t --tolerance <int>  UMI sequence edit distance tolerance (1)
-    --indel <int>         Set insertion/deletion penalty score (1)
-    --skip <int>          Skip mismatch detection if depth exceeds (5000)
+       --indel <int>      Set insertion/deletion penalty score (1)
+       --skip <int>       Skip mismatch detection if depth exceeds (5000)
 
 Other options:
 
-    -f --fasta <file>     Provide fasta file for Cram files
+    -f --fasta <file>     Provide indexed fasta file for Cram files
     -d --distance <int>   Set optical duplicate distance threshold.
                             Use 100 for unpatterned flowcell (HiSeq) or 
-                            2500 for patterned flowcell (NovaSeq). Default 0.
-    --coord <string>      Provide the tile:X:Y integer 1-base positions in the 
+                            2500 for patterned flowcell (NextSeq or NovaSeq6000)
+                            or 200 for NovaseqX. Default 0.
+       --coord <string>   Provide the tile:X:Y integer 1-base positions in the 
                             read name for optical checking. For Illumina CASAVA 1.8 
                             7-element names, this is 5:6:7 (default)
     -c --cpu <int>        Specify the number of forks to use (4) 
-    --samtools <path>     Path to samtools (/usr/local/bin/samtools)
+       --samtools <path>  Path to samtools (/usr/local/bin/samtools)
+       --nosam            Do not use samtools for final concatenation (slower)
     -h --help             Display full description and help
 
 

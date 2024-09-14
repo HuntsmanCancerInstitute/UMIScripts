@@ -15,20 +15,20 @@ This package can by installed using the standard Perl
 
 Otherwise, a Perl package manager may be used, such as CPAN or
 [CPAN Minus](https://metacpan.org/pod/App::cpanminus). If you have downloaded this
-package from GitHub, you can run one of the following inside the package directory.
+package from GitHub, run _one_ of the following inside the package directory.
 
 	cpan  .
 	cpanm .
 	cpanp .
 
 This installation will allow the scripts to work with Fastq files. However, to use
-the scripts with bam files, specifically bam_umi_dedup.pl, follow the Advanced 
-installation, below.
+the scripts with bam files, specifically [bam_umi_dedup.pl](apps/bam_umi_dedup.md),
+follow the Advanced installation, below.
 
 
 ## Advanced installation
 
-The [bam_umi_dedup](bam_umi_dedupapps/.md) application requires the installation of
+The [bam_umi_dedup](apps/bam_umi_dedup.md) application requires the installation of
 the [Bio::DB::HTS](https://metacpan.org/pod/Bio::DB::HTS) Perl adapter, which in turn 
 requires the external HTSlib library to be installed. 
 
@@ -67,7 +67,7 @@ should be installed first. These are listed below.
 Once these two prerequisites are installed, the remaining Perl modules can be installed.
 These are listed as recommendations in `Build.PL` and are not installed automatically
 as dependencies. Most Perl package managers, such as CPANMinus, CPANPlus, or CPAN 
-can be used here. Use one of the following, as appropriate:
+can be used here. Use _one_ of the following, as appropriate:
 
 	cpan  -i Bio::DB::HTS Parallel::ForkManager List::MoreUtils
 	cpanm -i Bio::DB::HTS Parallel::ForkManager List::MoreUtils

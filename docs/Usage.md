@@ -117,14 +117,14 @@ file with an extra step.
 
 To align Fastq with SAM tag comments:
 
-    bwa mem -t $CPU -v 1 -C reference.fasta *.fastq.gz | \
+    bwa mem -t $CPU -C reference.fasta *.fastq.gz | \
     samtools fixmate -m - output.bam
 
-To align with unaligned Bam file, it must first be converted to Fastq with tags as
-comments using `samtools` as a pre-step:
+To align with an unaligned Bam file, it must first be converted to Fastq with tags
+as comments using `samtools` as a pre-step:
 
     samtools fastq -T RX,RQ unaligned.bam | \
-    bwa mem -t $CPU -C -v 1 -p reference.fasta - | \
+    bwa mem -t $CPU -C -p reference.fasta - | \
     samtools fixmate -m - output.bam
 
 ### STAR
@@ -217,15 +217,16 @@ or from the name (`--barcode-name`). No mismatches in the UMI are tolerated.
 
 ### bam\_umi\_dedup
 
-The included [bam_umi_dedup.pl](bam_umi_dedupapps/.md) application is considerably
+The included [bam_umi_dedup.pl](apps/bam_umi_dedup.md) application is considerably
 faster than Picard, but with a **notable caveat**: no guarantee is made for retaining
 identical molecules at secondary, supplementary, and inter-chromosomal alignments
 (they are treated independently). Otherwise, for normal alignments, results are
-comparable to Picard. For most count-based applications such as ChIPSeq or RNASeq,
-this limitation may be acceptable.
+comparable to other tools. For most count-based applications such as ChIPSeq or
+RNASeq, this limitation may be acceptable.
 
-By default, duplicates are discarded, or they can marked with the `--mark` option.
-Unmapped alignments are silently discarded. 
+By default, duplicates are discarded, or they can be marked with the `--mark` option.
+Unmapped alignments are silently discarded (an unfortunate side effect of
+multi-threading by reference target sequences). 
 
 For de-duplication with SAM attribute tag `RX` (default):
 
@@ -235,11 +236,12 @@ For de-duplication with the UMI appended to the read name:
 
     bam_umi_dedup.pl --in input.bam --out output.bam --umi name --cpu $CPU
 
-By default, one mismatch is tolerated when de-duplicating with UMI sequences. 
-**Note** that extreme depth may substantially slow down execution time when mismatches 
-are tolerated. For `bam_umi_dedup`, a maximum depth is allowed for mismatch tolerance 
-before mismatch checking is dropped to avoid extreme impact (runtime of days). Dropping
-mismatch tolerance completely will also improve runtime.
+One mismatch (by default) is tolerated when de-duplicating with UMI sequences. This
+is an advantage over the other tools which do not tolerate mismatches. **Note** that
+extreme depth may substantially slow down execution time when mismatches are
+tolerated. For `bam_umi_dedup`, a maximum depth is allowed for mismatch tolerance
+before mismatch checking is dropped to avoid extreme impact (runtime of days!?).
+Dropping mismatch tolerance completely will improve runtime.
 
 ### Performance
 
