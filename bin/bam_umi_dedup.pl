@@ -363,8 +363,9 @@ if ($untagCount) {
 		($untagCount/($totalSingleCount + $totalPairedCount)) * 100;
 }
 
-print " Any unmapped alignments were discarded\n".
+print " Any unmapped alignments were discarded\n";
 printf "\n Wrote $outfile in %.1f minutes \n", (time - $start_time) / 60;
+
 #### End
 
 
@@ -715,7 +716,7 @@ sub write_se_reads_on_strand {
 	
 		# collect UMI
 		my $tag = &{$get_umi}($a);
-		if (defined $tag) {
+		if (defined $tag and $tag) {
 			$tag2reads{$tag} ||= [];
 			push @{ $tag2reads{$tag} }, $a;
 		}
@@ -733,7 +734,7 @@ sub write_se_reads_on_strand {
 	foreach my $tag (keys %tag2reads) {
 		if (scalar @{ $tag2reads{$tag} } == 1) {
 			# good, only 1 read, we can write it
-			$data->{outbam}->( $header, $tag2reads{$tag}->[0] );
+			$data->{outbam}->write1( $header, $tag2reads{$tag}->[0] );
 			$data->{uniqueSingleCount}++; # accepted read 
 		}
 		else {
@@ -762,7 +763,7 @@ sub write_se_reads_on_strand {
 				@{$nonopt_reads};
 		
 			# write the best one
-			$data->{outbam}->( $header, shift @sorted );
+			$data->{outbam}->write1( $header, shift @sorted );
 		
 			# update counters
 			$data->{uniqueSingleCount}++; # accepted read 
@@ -871,7 +872,7 @@ sub write_pe_reads_on_strand {
 			# pair hasn't been seen before
 			# collect the UMI code
 			my $tag = &{$get_umi}($a);
-			if (defined $tag) {
+			if (defined $tag and $tag) {
 				$tag2reads{$tag} ||= [];
 				push @{ $tag2reads{$tag} }, $a;
 			}
