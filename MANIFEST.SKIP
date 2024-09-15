@@ -77,9 +77,10 @@
 \bUMIScripts-[\d\.\_]+
 
 # Avoid deprecated scripts
-\bdeprecated$
+\bdeprecated
 
 # Avoid caches
 \b\.pls_cache
 
-
+# github pages docs
+\bdocs

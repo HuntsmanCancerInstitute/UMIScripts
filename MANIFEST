@@ -19,4 +19,5 @@ LICENSE
 MANIFEST			This list of files
 META.json
 META.yml
+cpanfile
 Readme.md
