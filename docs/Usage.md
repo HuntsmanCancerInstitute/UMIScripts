@@ -25,9 +25,9 @@ in combination with the UMI to determine uniqueness. 
 
 Keeping the UMI during the alignment step is tricky. It can't be part of the primary
 read, since it won't align to the genome, so it has to be associated through the use
-of alignment tags. The current [SAM
-specification](http://samtools.github.io/hts-specs/SAMtags.pdf) uses the `RX` tag for
-unique molecular index sequences, along with `QX` for UMI sequence quality. 
+of alignment tags. The current
+[SAM specification](http://samtools.github.io/hts-specs/SAMtags.pdf) uses the `RX`
+tag for unique molecular index sequences, along with `QX` for UMI sequence quality. 
 
 Unfortunately, by default, the Fastq file format doesn't allow for the use of extra
 metadata, so alternatives must be made.
@@ -56,10 +56,10 @@ load the module.
 
 ### Separate UMI Fastq file
 
-For a separate Fastq file, one can use the `merge_umi_fastq.pl` tool. It can take
-multiple Fastq files and sort them appropriately as Read1, Read2, and UMI based on
-name and size, or they can be explicitly set with appropriate command line options.
-The output file name or base name can optionally be provided.
+For a separate Fastq file, one can use the [merge_umi_fastq.pl](apps/merge_umi_fastq.md)
+tool. It can take multiple Fastq files and sort them appropriately as Read1, Read2,
+and UMI based on name and size, or they can be explicitly set with appropriate
+command line options. The output file name or base name can optionally be provided.
 
 - By default, it will generate SAM tags in the Fastq comment. 
 
@@ -74,14 +74,17 @@ The output file name or base name can optionally be provided.
 
         merge_umi_fastq.pl --bam *.fastq.gz
 
-The application can process 1 million paired-end reads in about 15-20 seconds. 
+The application can process 1 million paired-end reads in about 15-20 seconds,
+but this is entirely dependent on the machine. Output may be streamed to
+standard out if desired.
 
 ### Embedded UMI Fastq file
 
 When the UMI is embedded inline to the read, it must be extracted. It may be in the
-first read, second read, or both. The `embedded_UMI_extractor.pl` application can do
-this. It assumes that the UMI sequence is at the 5' end of the read, separated by a 
-fixed sequence. For example,
+first read, second read, or both. The
+[embedded_UMI_extractor.pl](apps/embedded_UMI_extractor.md) application can do this.
+It assumes that the UMI sequence is at the 5' end of the read, separated by a fixed
+sequence. For example,
 
     NNNNNNNNNNNNGATCxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
