@@ -1,153 +1,43 @@
 # UMI Scripts
 
-Simple scripts for handling Unique Molecular Indexes in Fastq and Bam files for 
-simple PCR de-duplication purposes.
+Scripts for handling Unique Molecular Indexes in Fastq and Bam files, primarily for 
+de-duplication purposes.
+
+Visit the [documentation page](https://huntsmancancerinstitute.github.io/UMIScripts/)
+for more details.
 
 ## Description
 
 Unique molecular indexes (UMIs) are short, random, nucleotide sequences incorporated 
 into next generation sequence reads for uniquely identifying biological molecules of 
-RNA or DNA. This aids in distinguishing biological duplicates from PCR derived duplicates.
+RNA or DNA. This aids in distinguishing biological duplicates from PCR-derived
+or technical (optical) duplicates.
 
-This package of scripts aid in processing these UMIs, both from Fastq and Bam files. 
-For simplicity and convenience, the UMI is appended to the read name. Other processing 
-schemes may use Bam attribute tags.
+This package of scripts aid in processing these UMIs, both from Fastq and Bam files.
+Embedded UMIs can be extracted from the primary sequence read in a Fastq file, or
+they may be provided as a separate Fastq file. They may be stored either appended
+to the read name or assigned to SAM/Bam attribute tag.
 
 These scripts are designed to be fairly simplistic and work as quickly as possible. 
-As such, UMIs are tested for exact matches without regard to base qualities or mismatches, 
-which is probably suitable in most cases where users are simply looking to remove PCR 
-artifacts. Users needing more advanced tools or reporting may need to look elsewhere.
+Users needing more advanced tools or reporting may need to look elsewhere.
 
-See the [Usage document](Usage.md) document for further details and suggestions.
-
-## Applications
-
-Below is a description of the included programs. 
-
-### Fastq
-
-These pre-alignment scripts are intended to work on Fastq files and extract a UMI and
-either append it to the read name or write it as a third file. This is usually done prior
-to trimming adapters. GZip compressed files are natively handled. Processed reads in 
-some cases can be piped out to downstream applications (adapter trimming or alignment).
-
-- `embedded_UMI_extractor.pl`
-
-    A simple script for extracting the UMI barcode from the beginning of the read. 
-    A fixed sequence may or may not be present between the UMI and the sequenced 
-    insert. Both single-end and paired-end (with or without a second UMI in the 
-    second read) fastq files are supported. The UMI may added as SAM tags to the 
-    Fastq read header, appended to the read name, or written out as an unaligned 
-    Sam or Bam file.
-
-- `merge_umi_fastq.pl`
-
-    A script for merging a third fastq file of UMI sequences with one (single-end) 
-    or two (paired-end) fastq reads. The UMI may be appended to the read name 
-    (non-standard), added as SAM tags to the Fastq read header, or written out as 
-    an unaligned Sam or Bam file, depending on need and available support by the aligner.
-
-- `smallRNA_pe_umi_extractor.pl`
-
-    A simple script for extracting the adapter and UMI sequence from a 
-    paired-end implementation of the Qiagen small RNA library preparation. 
-    The UMI and Qiagen adapter is identified in R2, any complete or partial 
-    Qiagen adapter identified and removed from R1, and R1 is written to output 
-    with the UMI appended to the read name for de-duplication later.
-
-- `qiagen_smallRNA_umi_extractor.pl`
-
-    A simple script for extracting the UMI from a Fastq read derived from 
-    Qiagen's Small RNA library preparation kit. Typically, a 60 base or longer read 
-    is needed. Since small RNAs are typically under 30 bases, the sequence goes 
-    through the RNA insert, Qiagen adapter, and index code. This script searches for the 
-    Qiagen adapter sequence, allowing for up to two mismatches, and extracts the remaining 
-    sequence as the UMI. 
-    
-    For a paired-end implementation of this, see `smallRNA_pe_umi_extractor.pl`.
-
-### Bam
-
-These post-alignment scripts are intended to work on Bam files for deduplication based 
-on coordinates and UMI sequence. They work on files only (no streaming). 
-
-- `bam_umi_dedup.pl`
-
-    A generic, multi-threaded, UMI-aware Bam de-duplication application. Alignments 
-    may be marked or removed based on coordinate, strand, and UMI sequence. UMI 
-    duplicates are selected based on highest quality scores (mapping and base quality). 
-    All single-end, proper paired-end, supplementary, and secondary alignments are 
-    processed, with caveats: supplementary, chimeric, secondary, and mate pairs on 
-    separate chromosomes are treated independently. 
-
-### Deprecated
-
-These are deprecated scripts, kept here for posterity, but superseded by other 
-scripts. Generally don't use.
-
-- `SingleEndFastqBarcodeTagger.pl`
-
-    A simple script for incorporating a second Fastq read of UMIs into the first 
-    Fastq file, appending the UMI to the read name.
-
-- `qiaseq_bam_deduplication.pl`
-
-    A paired-end, UMI-aware Bam de-duplication application designed to work with the 
-    qiaseq fastq scripts above. UMI duplicates are selected for the highest quality 
-    sequence. Superseded by the generic `bam_umi_dedup.pl`.
-
-- `qiaseq_barcode_extractor.pl`
-
-    A simple script to extract the UMI code from the beginning of the second Fastq read 
-    (paired-end) derived from the Qiagen Qiaseq PCR-amplicon based library preparation 
-    kit. It will remove the UMI code and write it as a third Fastq file. This is 
-    designed to work as a Qiagen-specific pre-processor for using the 
-    [USeq](https://github.com/HuntsmanCancerInstitute/USeq) FastqBarcodeTagger, 
-    MatchMates, and Consensus applications for collapsing PCR duplicate reads into 
-    a single consensus read for re-alignment. See 
-    [Workflows](https://github.com/HuntsmanCancerInstitute/Workflows) for examples.
-
-- `qiaseq_FastqBarcodeTagger.pl`
-
-    A simple script, similar to `qiaseq_barcode_extractor.pl`, to extract the UMI 
-    from Qiagen Qiaseq PCR-amplicon based library preparation and appending the 
-    UMI to the read name. Intended as a Qiagen-specific replacement processor for the 
-    [USeq](https://github.com/HuntsmanCancerInstitute/USeq) tool FastqBarcodeTagger 
-    and analogous to `embedded_UMI_extractor.pl`. Reads may then be aligned as normal 
-    and de-duplicated using the below scripts.
+See the documentation for more information, including
+[installation](https://huntsmancancerinstitute.github.io/UMIScripts/Install.html) help,
+suggested 
+[usage](https://huntsmancancerinstitute.github.io/UMIScripts/Usage.html),
+and a list of
+[applications](https://huntsmancancerinstitute.github.io/UMIScripts/Applications.html).
 
 
-## Usage
-
-Execute each script without any options to display the internal help page and 
-list of available options.
-
-See the accompanying [Usage document](Usage.md) for suggested guidance on processing 
-Fastq files, aligning with popular aligners, and de-duplicating.
-
-## Installation
-
-A standard Perl [Module::Build](https://metacpan.org/pod/Module::Build) script is 
-provided for ease of installation.
-
-    perl ./Build.PL
-    ./Build
-    ./Build install
-
-Installation of [Bio::DB::HTS](https://metacpan.org/pod/Bio::DB::HTS) requires the
-external  library `libhts` to be installed. Additional guidance can be found at the 
-[Bio::ToolBox repository](https://github.com/tjparnell/biotoolbox/blob/master/docs/AdvancedInstallation.md) 
-if necessary.
-
-# AUTHOR
+## AUTHOR
 
     Timothy J. Parnell, PhD
-    Bioinformatics Shared Resource
+    Cancer Bioinformatics Shared Resource
     Huntsman Cancer Institute
     University of Utah
     Salt Lake City, UT, 84112
 
-# LICENSE
+## LICENSE
 
 This package is free software; you can redistribute it and/or modify
 it under the terms of the Artistic License 2.0. For details, see the
