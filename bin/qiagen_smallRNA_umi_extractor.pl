@@ -12,6 +12,7 @@
 # https://github.com/tjparnell/HCI-Scripts/
 
 use strict;
+use English qw(-no_match_vars);
 use IO::File;
 use IO::Handle;
 use Getopt::Long;
@@ -23,7 +24,7 @@ eval {
 	$mismatch_ok = 1;
 };
 
-my $VERSION = 2;
+our $VERSION = 2.01;
 
 ########################################
 
@@ -59,7 +60,8 @@ to store it), and can be used in subsequent processing to remove PCR
 duplicates in combination with alignment information. See the script 
 bam_umi_dedup.pl as the companion application to do this.
 
-Usage: $0 -i input.fastq.gz --fail noUMI.fastq.gz | <aligner>
+Usage:
+	qiagen_smallRNA_umi_extractor.pl -i input.fastq.gz --fail noUMI.fastq.gz | <aligner>
 
 Options:
 	-i | --input <file>  Fastq file, may be gzipped
@@ -139,22 +141,22 @@ my ($infh, $outfh, $failfh);
 # input
 if ($file1 =~ /gz$/i) {
 	$infh = IO::File->new("gzip -dc $file1 |") or 
-		die "unable to open $file1! $!\n";
+		die "unable to open $file1! $OS_ERROR\n";
 }
 else {
 	$infh = IO::File->new("$file1") or 
-		die "unable to open $file1! $!\n";
+		die "unable to open $file1! $OS_ERROR\n";
 }
 
 # output
 if ($outfile) {
 	if ($outfile =~ /\.gz$/) {
 		$outfh = IO::File->new("| gzip >$outfile") or 
-			die "unable to open output $outfile! $!\n";
+			die "unable to open output $outfile! $OS_ERROR\n";
 	}
 	else {
 		$outfh = IO::File->new("$outfile", 'w') or 
-			die "unable to open output $outfile! $!\n";
+			die "unable to open output $outfile! $OS_ERROR\n";
 	}
 }
 else {
@@ -168,11 +170,11 @@ else {
 if ($failfile) {
 	if ($failfile =~ /\.gz$/) {
 		$failfh = IO::File->new("| gzip >$failfile") or 
-			die "unable to open output $failfile! $!\n";
+			die "unable to open output $failfile! $OS_ERROR\n";
 	}
 	else {
 		$failfh = IO::File->new("$failfile", 'w') or 
-			die "unable to open output $failfile! $!\n";
+			die "unable to open output $failfile! $OS_ERROR\n";
 	}
 }
 
@@ -192,7 +194,7 @@ while (my $header1  = $infh->getline) {
 	my $quality1  = $infh->getline or die "malformed file! no quality line";
 	
 	# find the position of the fixed adapter using the callback determined above
-	my $i = &$myindex($sequence1);
+	my $i = &{ $myindex }($sequence1);
 	
 	if ($i == -1) {
 		# the adapter sequence was not found

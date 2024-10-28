@@ -12,6 +12,7 @@
 # https://github.com/tjparnell/HCI-Scripts/
 
 use strict;
+use English qw(-no_match_vars);
 use Getopt::Long qw(:config no_ignore_case);
 use File::Basename qw(fileparse);
 use Bio::UMIScripts::FastqHelper qw(
@@ -28,7 +29,7 @@ use Bio::UMIScripts::UMIHelper qw(
 	name_append_umi_from_fastq_read
 );
 
-my $VERSION = 3.01;
+our $VERSION = 3.02;
 
 ####### Documentation
 my $description =  <<END;
@@ -217,29 +218,29 @@ if (not $outfile) {
 	if ($read_file2 and not $sam_format) {
 		# open two separate output handles
 		$outfile = $read_file1;
-		$outfile =~ s/\.(txt|fq|fastq)/.umi.$1/;
+		$outfile =~ s/\. (txt | fq | fastq) /.umi.$1/x;
 		$out_fh1 = write_fastq_filehandle($outfile, $cpu);
 		my $outfile2 = $read_file2;
-		$outfile2 =~ s/\.(txt|fq|fastq)/.umi.$1/;
+		$outfile2 =~ s/\. (txt | fq | fastq) /.umi.$1/x;
 		$out_fh2 = write_fastq_filehandle($outfile2, $cpu);
 	}
 	elsif (not $read_file2 and not $sam_format) {
 		# just one file output
 		$outfile = $read_file1;
-		$outfile =~ s/\.(txt|fq|fastq)/.umi.$1/;
+		$outfile =~ s/\. (txt | fq | fastq) /.umi.$1/x;
 		$out_fh1 = write_fastq_filehandle($outfile, $cpu);
 	}
 	elsif ($read_file2 and $sam_format) {
 		# open one bam output handle for both
 		$outfile = $read_file1;
-		$outfile =~ s/\.(?:txt|fq|fastq)(?:\.gz)?$/.bam/;
+		$outfile =~ s/\. (?: txt | fq | fastq) (?: \.gz)? $/.bam/x;
 		$out_fh1 = write_bam_filehandle($outfile, $cpu);
 		$out_fh2 = $out_fh2;
 	}
 	elsif (not $read_file2 and $sam_format) {
 		# just one file output
 		$outfile = $read_file1;
-		$outfile =~ s/\.(?:fq|fastq)(?:\.gz)?$/.bam/;
+		$outfile =~ s/\. (?: fq | fastq) (?: \.gz)? $/.bam/x;
 		$out_fh1 = write_bam_filehandle($outfile, $cpu);
 	}
 	else {
@@ -280,7 +281,7 @@ else {
 
 ### Write sam header as necessary
 if ($sam_format) {
-	my $cl = "$0 --read1 $read_file1 ";
+	my $cl = "$PROGRAM_NAME --read1 $read_file1 ";
 	$cl .= "--read2  $read_file2 " if $read_file2;
 	$cl .= "--out $outfile " if $outfile;
 	$cl .= "--umi $umi_location ";
@@ -401,7 +402,7 @@ sub process_single_end_sam {
 	while (my $read = get_fastq_read($in_fh1)) {
 		
 		# extract UMI sequence
-		my $umi = &$extract_umi($read, $umi1_length, $fixed1);
+		my $umi = &{$extract_umi}($read, $umi1_length, $fixed1);
 		if ($umi) {
 			my $tag = umi_sam_tags_from_fastq_read($umi);
 			$out_fh1->print( $read->sam_string($flag1, $tag) );
@@ -418,7 +419,7 @@ sub process_single_end_name_append {
 	while (my $read = get_fastq_read($in_fh1)) {
 		
 		# extract UMI sequence
-		my $umi = &$extract_umi($read, $umi1_length, $fixed1);
+		my $umi = &{$extract_umi}($read, $umi1_length, $fixed1);
 		if ($umi) {
 			name_append_umi_from_fastq_read($read, $umi);
 			$out_fh1->print( $read->fastq_string );
@@ -435,7 +436,7 @@ sub process_single_end_fastq_tag {
 	while (my $read = get_fastq_read($in_fh1)) {
 		
 		# extract UMI sequence
-		my $umi = &$extract_umi($read, $umi1_length, $fixed1);
+		my $umi = &{$extract_umi}($read, $umi1_length, $fixed1);
 		if ($umi) {
 			my $tag = umi_sam_tags_from_fastq_read($umi);
 			$out_fh1->print( $read->fastq_string($tag) );
@@ -461,7 +462,7 @@ sub process_paired_end_with_one_umi_sam {
 		}
 		
 		# extract UMI sequence
-		my $umi = &$extract_umi($umi_location == 1 ? $read1 : $read2,
+		my $umi = &{$extract_umi}($umi_location == 1 ? $read1 : $read2,
 			$umi1_length, $fixed1);
 		if ($umi) {
 			my $tag = umi_sam_tags_from_fastq_read($umi);
@@ -489,7 +490,7 @@ sub process_paired_end_with_one_umi_name_append {
 		}
 		
 		# extract UMI sequence
-		my $umi = &$extract_umi($umi_location == 1 ? $read1 : $read2, 
+		my $umi = &{$extract_umi}($umi_location == 1 ? $read1 : $read2, 
 			$umi1_length, $fixed1);
 		if ($umi) {
 			name_append_umi_from_fastq_read($read1, $umi);
@@ -518,7 +519,7 @@ sub process_paired_end_with_one_umi_fastq_tag {
 		}
 		
 		# extract UMI sequence
-		my $umi = &$extract_umi($umi_location == 1 ? $read1 : $read2,
+		my $umi = &{$extract_umi}($umi_location == 1 ? $read1 : $read2,
 			$umi1_length, $fixed1);
 		if ($umi) {
 			my $tag = umi_sam_tags_from_fastq_read($umi);
@@ -548,8 +549,8 @@ sub process_paired_end_with_two_umi_sam {
 		}
 		
 		# extract UMI sequence
-		my $umi1 = &$extract_umi($read1, $umi1_length, $fixed1);
-		my $umi2 = &$extract_umi($read2, $umi2_length, $fixed2);
+		my $umi1 = &{$extract_umi}($read1, $umi1_length, $fixed1);
+		my $umi2 = &{$extract_umi}($read2, $umi2_length, $fixed2);
 		if ($umi1 and $umi2) {
 			# both found, both good
 			my $umi = $umi1->concatenate_reads($umi2);
@@ -583,8 +584,8 @@ sub process_paired_end_with_two_umi_name_append {
 		}
 		
 		# extract UMI sequence
-		my $umi1 = &$extract_umi($read1, $umi1_length, $fixed1);
-		my $umi2 = &$extract_umi($read2, $umi2_length, $fixed2);
+		my $umi1 = &{$extract_umi}($read1, $umi1_length, $fixed1);
+		my $umi2 = &{$extract_umi}($read2, $umi2_length, $fixed2);
 		if ($umi1 and $umi2) {
 			# both found, both good
 			my $umi = $umi1->concatenate_reads($umi2);
@@ -619,8 +620,8 @@ sub process_paired_end_with_two_umi_fastq_tag {
 		}
 		
 		# extract UMI sequence
-		my $umi1 = &$extract_umi($read1, $umi1_length, $fixed1);
-		my $umi2 = &$extract_umi($read2, $umi2_length, $fixed2);
+		my $umi1 = &{$extract_umi}($read1, $umi1_length, $fixed1);
+		my $umi2 = &{$extract_umi}($read2, $umi2_length, $fixed2);
 		if ($umi1 and $umi2) {
 			# both found, both good
 			my $umi = $umi1->concatenate_reads($umi2);
