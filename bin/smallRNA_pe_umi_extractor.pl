@@ -12,12 +12,13 @@
 # https://github.com/tjparnell/HCI-Scripts/
 
 use strict;
+use English qw(-no_match_vars);
 use IO::File;
 use Getopt::Long;
 use String::Approx qw(aindex);
 
 ########################################
-
+our $VERSION = 0.2;
 
 my $fixed = 'ATTGATGGTGCCTACAGTT'; # read2 adapter
 my $file1;
@@ -62,8 +63,9 @@ The UMI is appended to the read name as ":NNNNNNNNNNNN". After
 alignment, the bam file may be de-duplicated with bam_umi_dedup.pl.
 
 
-Usage: $0 --out <basename> --f1 <read_1> --f2 <read_2>
-       $0 <read_1> <read_2>
+Usage: 
+   smallRNA_pe_umi_extractor.pl --out <basename> --f1 <read_1> --f2 <read_2>
+   smallRNA_pe_umi_extractor.pl <read_1> <read_2>
 
 Options:
     -1 |--f1 <file>      First read in Fastq, may be gzipped
@@ -129,32 +131,32 @@ my ($infh1, $infh2, $outfh, $suspectfh, $failfh);
 # input1
 if ($file1 =~ /gz$/i) {
 	$infh1 = IO::File->new("gzip -dc $file1 |") or 
-		die "unable to open $file1! $!\n";
+		die "unable to open $file1! $OS_ERROR\n";
 }
 else {
 	$infh1 = IO::File->new("$file1") or 
-		die "unable to open $file1! $!\n";
+		die "unable to open $file1! $OS_ERROR\n";
 }
 
 # input2
 if ($file2 =~ /gz$/i) {
 	$infh2 = IO::File->new("gzip -dc $file2 |") or 
-		die "unable to open $file2! $!\n";
+		die "unable to open $file2! $OS_ERROR\n";
 }
 else {
 	$infh2 = IO::File->new("$file2") or 
-		die "unable to open $file2! $!\n";
+		die "unable to open $file2! $OS_ERROR\n";
 }
 
 # output
 if ($outfile) {
 	if ($outfile =~ /\.gz$/) {
 		$outfh = IO::File->new("| gzip >$outfile") or 
-			die "unable to open output $outfile! $!\n";
+			die "unable to open output $outfile! $OS_ERROR\n";
 	}
 	else {
 		$outfh = IO::File->new("$outfile", 'w') or 
-			die "unable to open output $outfile! $!\n";
+			die "unable to open output $outfile! $OS_ERROR\n";
 	}
 }
 else {
@@ -168,11 +170,11 @@ else {
 if ($suspectfile) {
 	if ($suspectfile =~ /\.gz$/) {
 		$suspectfh = IO::File->new("| gzip >$suspectfile") or 
-			die "unable to open output $suspectfile! $!\n";
+			die "unable to open output $suspectfile! $OS_ERROR\n";
 	}
 	else {
 		$suspectfh = IO::File->new("$suspectfile", 'w') or 
-			die "unable to open output $suspectfile! $!\n";
+			die "unable to open output $suspectfile! $OS_ERROR\n";
 	}
 }
 
@@ -180,11 +182,11 @@ if ($suspectfile) {
 if ($failfile) {
 	if ($failfile =~ /\.gz$/) {
 		$failfh = IO::File->new("| gzip >$failfile") or 
-			die "unable to open output $failfile! $!\n";
+			die "unable to open output $failfile! $OS_ERROR\n";
 	}
 	else {
 		$failfh = IO::File->new("$failfile", 'w') or 
-			die "unable to open output $failfile! $!\n";
+			die "unable to open output $failfile! $OS_ERROR\n";
 	}
 }
 
