@@ -202,7 +202,7 @@ my $missingR1Count = 0;
 my $fix_length = length($fixed);
 my $rfixed = reverse scalar($fixed);
 $rfixed =~ tr/ATGC/TACG/;
-my $rfix_short = substr($fixed, 0, 12); # trim to the first 12 bases
+my $rfix_short = substr($rfixed, 0, 12); # trim to the first 12 bases
 
 
 
