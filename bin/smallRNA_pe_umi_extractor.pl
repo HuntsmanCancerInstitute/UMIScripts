@@ -32,8 +32,8 @@ my $print_help;
 my $help = <<END;
 
 A script to extract the Unique Molecular Index (UMI) from the second 
-read of a paired-end Qiagen small RNA library. The structure of 
-a typical small RNA paired-end read is as follows:
+read of a short-read (50 bp) paired-end Qiagen small RNA library.
+The structure of a typical small RNA paired-end read is as follows:
 
 R1  tagcttatcagactgatgttga AACTGTAGGCACCATCAAT NNNNNNNNN
     <--miRNA-------------> <--adapter--------> <--UMI-->
@@ -42,12 +42,13 @@ R2  NNNNNNNNNNNN ATTGATGGTGCCTACAGTT tcaacatcagtctgataag
     <--UMI-----> <--adapter--------> <--miRNA---------->
 
 Since the small RNA insert may be of variable length, the full UMI 
-sequence ($umi_length) is not reliably present in R1, hence extracting it from 
-R2 is necessary. The Qiagen adapter is identified in R2 (allowing for 
-mismatches as necessary), the preceding UMI is extracted, and the UMI 
-appended to the read name. The Qiagen adapter is also searched for and 
-removed from R1 if present, allowing for mismatches and deletions as 
-necessary. 
+sequence (12 bp by default) may not be reliably present within the full 
+read length of R1, in which case extracting it from R2 becomes necessary.
+
+The Qiagen adapter is identified in R2 (allowing for mismatches as
+necessary), the preceding UMI is extracted, and the UMI appended to the
+read name. The Qiagen adapter is also searched for and removed from R1 if
+present, allowing for mismatches and deletions as necessary. 
 
 Only one Fastq file, R1, is written out. Reads with adapter sequence 
 in both R2 and R1 is always written to output. Reads with the adapter 
