@@ -1,5 +1,5 @@
 package Bio::UMIScripts::UMIHelper;
-our $VERSION = 5;
+our $VERSION = 5.11;
 
 =head1 Bio::UMIScripts::UMIHelper - UMI helper routines for UMIScripts
 
@@ -46,6 +46,14 @@ The UMI Fastq Read is generated and returned.
     printf "%s\n", $Read1->seq; #                  CCAAACCTATGGGACACAATGAAAGCA
     
 
+=item extract_umi_from_name($read1)
+
+Extracts the UMI sequence that was appended to the end of a read name. It
+looks for a string comprised of characters C<ACGTN-> at the end of the name.
+The sequence is removed from the name of the read object that was passed.
+A new L<Bio::UMIScripts::FastqRead> object is returned. Sequence quality
+is set uniformly as C<I>.
+
 =item name_append_umi_from_fastq_read($read1, $umi)
 
 Appends the sequence from the Read2 Fastq (UMI) to the name of the Read1 Fastq.
@@ -87,6 +95,7 @@ our @EXPORT_OK = qw(
 	umi_sam_tags_from_fastq_read
 	extract_umi_with_fixed_from_fastq
 	extract_umi_from_fastq
+	extract_umi_from_name
 	name_append_umi_from_fastq_read
 );
 
@@ -104,7 +113,7 @@ sub extract_umi_with_fixed_from_fastq {
 	my ($read, $umi_length, $fixed) = @_;
 	
 	# prepare new
-	my $umi = $read->new($read->name, $read->description, '', '', '');
+	my $umi = $read->new( $read->name, $read->description, q(), q(), q() );
 	
 	# look for the UMI fixed sequence, if present pull the UMI sequence 
 	# I have tried a number of strategies here
@@ -166,6 +175,35 @@ sub extract_umi_from_fastq {
 	# extract sequences while altering original sequence
 	$umi->[QUAL] = substr $read->[QUAL], 0, $umi_length, q();
 	$umi->[SEQ]  = substr $read->[SEQ], 0, $umi_length, q();
+	return $umi;
+}
+
+sub extract_umi_from_name {
+	my $read = shift;
+	my $name = $read->name;
+	my $umi_seq;
+	if ( $name =~ s/: ( [ACGTN\-\+]{4,} ) $//xi ) {
+		$umi_seq = $1;
+	}
+	else {
+		my @bits = split /:/, $name;
+		# assume we have an Illumina CASAVA style name
+		if ( scalar @bits >= 8 and $bits[7] =~ /^ [ACGTN\-\+]{4,} $/xi ) {
+			$umi_seq = $bits[7];
+			$name = join ':', @bits[0..6];
+		}
+		else {
+			return;
+		}
+	}
+	return unless $umi_seq;
+	
+	# update original name
+	$name = '@' . $name;
+	$read->[NAME] = $name;
+	
+	# generate new 
+	my $umi = $read->new($name, q(), $umi_seq, q(), ('I' x scalar($umi_seq) ) );
 	return $umi;
 }
 
