@@ -44,7 +44,7 @@ External utilities may be required for execution, inlcuding `pigz` and/or `gzip`
 and `samtools`. These are searched for in your environment `PATH`.
 
 
-Version: 3.01
+Version: 3.03
 
 ### Usage
 
@@ -59,7 +59,8 @@ Input:
 
     -1 --read1 <file>       First fastq read
     -2 --read2 <file>       Second fastq read, optional
-    -u --umi <integer>      Read containing UMI: 1, 2, or 12 (default 1 or 12)
+    -u --umi <integer>      Read containing UMI: 1, 2, or 12 (both)
+                              (default is all reads provided, 1 or 12)
 
 Output:
 
@@ -71,10 +72,11 @@ Output:
 
 UMI Options:
 
-    -l --length  <integer>  Length of UMI at beginning of read1
-    -L --length2 <integer>  Length of UMI at beginning of read2 (if different)
-    -f --fixed   <text>     Fixed sequence after UMI for read1 (optional) 
-    -F --fixed2  <text>     Fixed sequence after UMI for read2 (optional, if different) 
+    -l --length  <integer>  Length of UMI (required)
+    -L --length2 <integer>  Length of UMI for read2 (only if different from read1)
+    -f --fixed   <text>     Fixed sequence after UMI (optional) 
+    -F --fixed2  <text>     Fixed sequence after UMI for read2
+                              (optional, only if different from read1) 
 
 Other:
 
