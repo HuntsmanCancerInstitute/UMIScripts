@@ -17,6 +17,7 @@ use Bio::UMIScripts::UMIHelper qw(
 	umi_sam_tags_from_fastq_read
 	extract_umi_with_fixed_from_fastq
 	extract_umi_from_fastq
+	extract_umi_from_name
 	name_append_umi_from_fastq_read
 );
 
@@ -101,7 +102,7 @@ ok(!$read4->check_quality(20), 'check read4 minimum quality of 20 false');
 my $cat1 = $read3->concatenate_reads($read4);
 isa_ok($cat1, 'Bio::UMIScripts::FastqRead', 'concatenated read object');
 is($cat1->name, 'A001:414:xxxxx:1:1101:2989:356', 'concatenated read name');
-is($cat1->description, '', 'concatenated read description');
+is($cat1->description, q(), 'concatenated read description');
 is($cat1->sequence, 'TCCGTTTCTGT+GCAGGCACCTN', 'concatenated read sequence string');
 is($cat1->quality, 'FFFFF:FF:F:+,F,,,FFFFF#', 'concatenated read quality string');
 
@@ -182,6 +183,11 @@ $example = $read1->duplicate_read;
 ok(name_append_umi_from_fastq_read($example, $read3), 'append UMI sequence to name');
 is($example->name, 'A001:414:xxxxx:1:1101:2989:2566:TCCGTTTCTGT', 'appended new name');
 
+# extract the UMI back from the read name
+my $umi2 = extract_umi_from_name($example);
+isa_ok($umi2, 'Bio::UMIScripts::FastqRead', 'extracted UMI read object from read name');
+is($umi2->sequence, 'TCCGTTTCTGT', 'extracted UMI sequence');
+is($umi2->name, 'A001:414:xxxxx:1:1101:2989:2566', 'extracted UMI name');
 
 
 ### Fastq string
