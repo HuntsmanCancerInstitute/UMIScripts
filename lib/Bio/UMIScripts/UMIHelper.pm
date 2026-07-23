@@ -100,11 +100,6 @@ our @EXPORT_OK = qw(
 );
 
 
-# the true value
-1;
-
-
-
 sub umi_sam_tags_from_fastq_read {
 	return sprintf "RX:Z:%s\tQX:Z:%s", $_[0]->[SEQ], $_[0]->[QUAL];
 }

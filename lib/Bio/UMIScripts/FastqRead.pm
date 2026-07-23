@@ -1,5 +1,5 @@
 package Bio::UMIScripts::FastqRead;
-our $VERSION = 5;
+our $VERSION = 5.11;
 
 =head1 Bio::UMIScripts::FastqRead - Fastq Read object
 
@@ -99,6 +99,7 @@ it under the terms of the Artistic License 2.0.
 =cut
 
 use strict;
+use English qw(-no_match_vars);
 use List::Util qw(min);
 use String::Approx qw(amatch);
 use Bio::UMIScripts::FastqConstant;
@@ -149,11 +150,11 @@ sub compare_names {
 }
 
 sub extract_illumina_sample {
-	if ($_[0]->[DESC] =~ m/\d+:\w:\d+:([ATGCN]+[\+\-]?[ATGCN]*)/) {
+	if ($_[0]->[DESC] =~ m/\d+ : \w: \d+ : ([ATGCN]+ [\+\-]? [ATGCN]* )/x) {
 		return "BC:Z:$1";
 	}
 	else {
-		return '';
+		return q();
 	}
 }
 
@@ -162,7 +163,7 @@ sub check_quality {
 	# my ($read, $min_basequal) = @_;
 	if (index($_[0]->[SEQ],'N') == -1) {
 		# good sequence, no N's
-		my @quals = map {ord($_) - 33} split q(), $_[0]->[QUAL];
+		my @quals = map { ord() - 33 } split( m//, $_[0]->[QUAL] );
 		if (min(@quals) >= $_[1]) {
 			# good quality
 			return 1;
@@ -175,9 +176,9 @@ sub concatenate_reads {
 	# read1, read2
 	my @a = (
 		$_[0]->[NAME],
-		'',
+		q(),
 		$_[0]->[SEQ] . '+' . $_[1]->[SEQ],
-		'',
+		q(),
 		$_[0]->[QUAL] . '+' . $_[1]->[QUAL]
 	);
 	return $_[0]->new(@a);
@@ -207,17 +208,17 @@ sub sam_string {
 		0,                      # TLEN
 		$_[0]->[SEQ],           # SEQ
 		$_[0]->[QUAL],          # QUAL
-		$_[2] || ''             # TAGS
+		$_[2] || q()            # TAGS
 	;
 }
 
 sub duplicate_read {
 	return $_[0]->new(
-		$_[0]->[NAME]   || '',
-		$_[0]->[DESC]   || '',
-		$_[0]->[SEQ]    || '',
-		$_[0]->[SPACER] || '',
-		$_[0]->[QUAL]   || ''
+		$_[0]->[NAME]   || q(),
+		$_[0]->[DESC]   || q(),
+		$_[0]->[SEQ]    || q(),
+		$_[0]->[SPACER] || q(),
+		$_[0]->[QUAL]   || q()
 	);
 }
 

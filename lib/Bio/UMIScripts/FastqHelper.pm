@@ -1,5 +1,5 @@
 package Bio::UMIScripts::FastqHelper;
-our $VERSION = 5.01;
+our $VERSION = 5.11;
 
 =head1 Bio::UMIScripts::FastqHelper - Fastq helper routines for UMIScripts
 
@@ -81,6 +81,7 @@ it under the terms of the Artistic License 2.0.
 =cut
 
 use strict;
+use English qw(-no_match_vars);
 use IO::File;
 use IO::Handle;
 use List::Util qw(min);
@@ -113,24 +114,24 @@ our @EXPORT_OK = qw(
 
 sub read_fastq_filehandle {
 	my $file = $_[0];
-	unless ($file =~ /\.(?:fastq|fq|txt)(?:\.gz|\.bz2)?$/) {
+	unless ($file =~ /\.(?: fastq | fq | txt) (?: \.gz | \.bz2 )? $/xi) {
 		print STDERR "file $file does not have expected file extension!\n";
 	}
 	my $fh;
 	if ($file =~ /\.gz$/i) {
 		# decompress with gzip
 		$fh = IO::File->new("$GZIP_APP -d -c $file |") or
-			die "unable to open file $file! $!\n";
+			die "unable to open file $file! $OS_ERROR\n";
 	}
 	elsif ($file =~ /\.bz2$/) {
 		# hope for the best????
 		$fh = IO::File->new("bzip2 -d -c $file |") or
-			die "unable to open file $file! $!\n";
+			die "unable to open file $file! $OS_ERROR\n";
 	}
 	else {
 		# why do we have an uncompressed file???? geez! 
 		$fh = IO::File->new($file) or
-			die "unable to open file $file! $!\n";
+			die "unable to open file $file! $OS_ERROR\n";
 	}
 	return $fh;
 }
@@ -149,25 +150,25 @@ sub write_fastq_filehandle {
 		if ($PIGZ_APP) {
 			print STDERR " Writing with $PIGZ_APP -p $cpu to $outfile\n";
 			$fh = IO::File->new("| $PIGZ_APP -p $cpu -c > $outfile") or
-				die "cannot write to compressed file '$outfile' $!\n";
+				die "cannot write to compressed file '$outfile' $OS_ERROR\n";
 		}
 		elsif ($GZIP_APP) {
 			print STDERR " Writing with $GZIP_APP to $outfile\n";
 			$fh = IO::File->new("| $GZIP_APP -c > $outfile") or
-				die "cannot write to compressed file '$outfile' $!\n";
+				die "cannot write to compressed file '$outfile' $OS_ERROR\n";
 		}
 		else {
 			print STDERR " Gzip applications not available!\n";
 			$outfile =~ s/\.gz$//;
 			print STDERR " Writing to $outfile\n";
 			$fh = IO::File->new($outfile, 'w') or
-				die "cannot write to file '$outfile' $!\n";
+				die "cannot write to file '$outfile' $OS_ERROR\n";
 		}
 	}
 	else {
 		print STDERR " Writing to $outfile\n";
 		$fh = IO::File->new($outfile, 'w') or
-			die "cannot write to file '$outfile' $!\n";
+			die "cannot write to file '$outfile' $OS_ERROR\n";
 	}
 	return $fh;
 }
@@ -195,7 +196,7 @@ sub write_bam_filehandle {
 	if ($outfile =~ /\.bam$/) {
 		print STDERR " Writing with $SAMTOOLS_APP view -b -\@ $cpu to $outfile\n";
 		my $fh = IO::File->new("| $SAMTOOLS_APP view -b -@ $cpu -o $outfile - ") or
-			die "unable to open output to $SAMTOOLS_APP! $!\n";
+			die "unable to open output to $SAMTOOLS_APP! $OS_ERROR\n";
 		$fh->print("\@HD\tVN:1.6\tSO:unsorted\n");
 		return $fh;
 	}
@@ -218,7 +219,7 @@ sub get_fastq_read {
 	chomp $sequence;
 	chomp $spacer;
 	chomp $quality;
-	my ($name, $description) = split '\s+', $header, 2;
+	my ($name, $description) = split /\s+/, $header, 2;
 	return Bio::UMIScripts::FastqRead->new(
 		$name,
 		$description,

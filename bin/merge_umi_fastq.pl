@@ -12,6 +12,7 @@
 # https://github.com/HuntsmanCancerInstitute/UMIScripts
 
 use strict;
+use English qw(-no_match_vars);
 use IO::File;
 use IO::Handle;
 use Getopt::Long qw(:config no_ignore_case);
@@ -31,7 +32,7 @@ use Bio::UMIScripts::UMIHelper qw(
 
 ########################################
 
-my $VERSION = 1.01;
+our $VERSION = 1.02;
 
 
 ### Options
@@ -149,7 +150,7 @@ if (not $read_file1 and not $umi_file1 and scalar @ARGV) {
 	# sort them out by size
 	my @list =
 		sort {$b->[1] <=> $a->[1]}      # decreasing size
-		map { [$_, (stat $_)[7] ] }    # array of filename and size <- 8th element from stat array
+		map { [$_, (stat)[7] ] }    # array of filename and size <- 8th element from stat array
 		@ARGV;
 	if (scalar @list == 2) {
 		# one fastq and one umi
@@ -194,7 +195,7 @@ if (not $read_file1) {
 if (not $umi_file1) {
 	die "Must provide a UMI fastq files!\n";
 }
-if ($outfile and $outfile =~ /\.[s|b]am(?:\.gz)?$/) {
+if ($outfile and $outfile =~ /\. [s|b] am (?: \.gz)? $/x) {
 	# convenience
 	$sam_format = 1;
 }
@@ -242,29 +243,29 @@ if (not $outfile) {
 	if ($read_file2 and not $sam_format) {
 		# open two separate output handles
 		$outfile = $read_file1;
-		$outfile =~ s/\.(txt|fq|fastq)/.umi.$1/;
+		$outfile =~ s/\. (txt | fq | fastq)/.umi.$1/xi;
 		$out_fh1 = write_fastq_filehandle($outfile, $cpu);
 		my $outfile2 = $read_file2;
-		$outfile2 =~ s/\.(txt|fq|fastq)/.umi.$1/;
+		$outfile2 =~ s/\. (txt | fq | fastq)/.umi.$1/xi;
 		$out_fh2 = write_fastq_filehandle($outfile2, $cpu);
 	}
 	elsif (not $read_file2 and not $sam_format) {
 		# just one file output
 		$outfile = $read_file1;
-		$outfile =~ s/\.(txt|fq|fastq)/.umi.$1/;
+		$outfile =~ s/\. (txt | fq | fastq)/.umi.$1/xi;
 		$out_fh1 = write_fastq_filehandle($outfile, $cpu);
 	}
 	elsif ($read_file2 and $sam_format) {
 		# open one bam output handle for both
 		$outfile = $read_file1;
-		$outfile =~ s/\.(?:txt|fq|fastq)(?:\.gz)?$/.bam/;
+		$outfile =~ s/\. (txt | fq | fastq)(?: \.gz)? $/.bam/xi;
 		$out_fh1 = write_bam_filehandle($outfile, $cpu);
 		$out_fh2 = $out_fh2;
 	}
 	elsif (not $read_file2 and $sam_format) {
 		# just one file output
 		$outfile = $read_file1;
-		$outfile =~ s/\.(?:fq|fastq)(?:\.gz)?$/.bam/;
+		$outfile =~ s/\. (txt | fq | fastq) (?: \.gz)? $/.bam/xi;
 		$out_fh1 = write_bam_filehandle($outfile, $cpu);
 	}
 	else {
@@ -305,7 +306,7 @@ else {
 
 ### Write sam header as necessary
 if ($sam_format) {
-	my $cl = "$0 --read1 $read_file1 ";
+	my $cl = "$PROGRAM_NAME --read1 $read_file1 ";
 	$cl .= "--read2  $read_file2 " if $read_file2;
 	$cl .= "--umi $umi_file1 ";
 	$cl .= "--umi2 $umi_file2 " if $umi_file2;
@@ -440,7 +441,7 @@ sub process_paired_sam {
 		}
 		
 		# UMI tags
-		my $umi = &$read_umi($read1) or die "mismatched files!";
+		my $umi = &{$read_umi}($read1) or die "mismatched files!";
 		my $tag = umi_sam_tags_from_fastq_read($umi);
 		
 		# first read
@@ -471,7 +472,7 @@ sub process_paired_name_append {
 		}
 		
 		# UMI 
-		my $umi = &$read_umi($read1) or die "mismatched files!";
+		my $umi = &{$read_umi}($read1) or die "mismatched files!";
 		
 		# first read
 		name_append_umi_from_fastq_read($read1, $umi);
@@ -502,7 +503,7 @@ sub process_paired_fastq_tag {
 		}
 		
 		# UMI 
-		my $umi = &$read_umi($read1) or die "mismatched files!";
+		my $umi = &{$read_umi}($read1) or die "mismatched files!";
 		my $tag = umi_sam_tags_from_fastq_read($umi);
 		
 		# first read
@@ -524,7 +525,7 @@ sub process_single_name_append {
 	my $i = 0;
 	while (my $read1 = get_fastq_read($read_fh1)) {
 		# UMI 
-		my $umi = &$read_umi($read1) or die "mismatched files!";
+		my $umi = &{$read_umi}($read1) or die "mismatched files!";
 		
 		# first read
 		name_append_umi_from_fastq_read($read1, $umi);
@@ -542,7 +543,7 @@ sub process_single_sam {
 	my $i = 0;
 	while (my $read1 = get_fastq_read($read_fh1)) {
 		# UMI tags
-		my $umi = &$read_umi($read1) or die "mismatched files!";
+		my $umi = &{$read_umi}($read1) or die "mismatched files!";
 		my $tag = umi_sam_tags_from_fastq_read($umi);
 		
 		# first read
@@ -560,7 +561,7 @@ sub process_single_fastq_tag {
 	my $i = 0;
 	while (my $read1 = get_fastq_read($read_fh1)) {
 		# UMI 
-		my $umi = &$read_umi($read1) or die "mismatched files!";
+		my $umi = &{$read_umi}($read1) or die "mismatched files!";
 		my $tag = umi_sam_tags_from_fastq_read($umi);
 		
 		# first read
