@@ -203,7 +203,7 @@ sub extract_umi_from_name {
 	$read->[NAME] = $name;
 	
 	# generate new 
-	my $umi = $read->new($name, q(), $umi_seq, q(), ('I' x scalar($umi_seq) ) );
+	my $umi = $read->new($name, q(), $umi_seq, q(), ('I' x length($umi_seq) ) );
 	return $umi;
 }
 
